@@ -310,13 +310,27 @@ fn self_segments() -> HashMap<String, Vec<Value>> {
     let mut files: Vec<(PathBuf, String)> = vec![];
     let list = |dir: PathBuf| -> Vec<PathBuf> { fs::read_dir(dir).map(|r| r.filter_map(|e| e.ok()).map(|e| e.path()).collect()).unwrap_or_default() };
     files.extend(list(data_root().join("summaries")).into_iter().map(|p| (p, me.clone())));
+    // 测试版影子目录：再并上正式目录里的旧摘要（开测前的正式记录），同 start 以影子为准
+    if beayy_core::shadow_mode() && data_root() != default_root() {
+        files.extend(list(default_root().join("summaries")).into_iter().map(|p| (p, me.clone())));
+    }
     for dev in list(data_root().join("devices")) {
         let d = dev.file_name().unwrap_or_default().to_string_lossy().to_string();
         if d != me && beayy_summary::is_computer(&d) {
             files.extend(list(dev.join("summaries")).into_iter().map(|p| (p, d.clone())));
         }
     }
-    files.sort();
+    // 影子路径优先：同 start 先出现的留下（上面已先 extend data_root）
+    files.sort_by(|a, b| {
+        let a_shadow = a.0.starts_with(&data_root());
+        let b_shadow = b.0.starts_with(&data_root());
+        match (a_shadow, b_shadow) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.0.cmp(&b.0),
+        }
+    });
+    let mut seen_starts: HashSet<String> = HashSet::new();
     let front_re = Regex::new(r"(?m)^(title|description|applications): (.*)$").unwrap();
     let mem_re = Regex::new(r"(?ms)^## Memory summary\n+(.+?)(?:\n#|\z)").unwrap();
     let ctx_re = Regex::new(r"(?ms)^### Important non-obvious context about the user\n+(.+?)(?:\n#|\z)").unwrap();
@@ -328,6 +342,10 @@ fn self_segments() -> HashMap<String, Vec<Value>> {
         }
         let Ok(start) = chrono::NaiveDateTime::parse_from_str(&name[..19], "%Y-%m-%dT%H-%M-%S") else { continue };
         let start = Utc.from_utc_datetime(&start);
+        let start_key = utc_iso(start);
+        if !seen_starts.insert(format!("{device}|{start_key}")) {
+            continue;
+        }
         let six = name.contains("-6h-");
         let end = start + if six { Duration::hours(6) } else { Duration::minutes(10) };
         let md = fs::read_to_string(&f).unwrap_or_default();
