@@ -1058,8 +1058,13 @@ fn computer_hours(c: &Value) -> Value {
 /// 电脑自采分段目录名 → 本地日期（还没写成 10 分钟摘要时，总结页也要能看到这些天）
 fn computer_event_dates() -> HashSet<String> {
     let mut dates = HashSet::new();
-    let Ok(devs) = fs::read_dir(data_root().join("devices")) else { return dates };
-    for dev in devs.filter_map(|e| e.ok()) {
+    // 测试版（影子目录）同时看正式目录里的采集日期
+    let mut roots = vec![data_root()];
+    if data_root() != default_root() {
+        roots.push(default_root());
+    }
+    let devs: Vec<fs::DirEntry> = roots.iter().filter_map(|r| fs::read_dir(r.join("devices")).ok()).flat_map(|d| d.filter_map(|e| e.ok())).collect();
+    for dev in devs {
         let name = dev.file_name().to_string_lossy().to_string();
         if !beayy_summary::is_computer(&name) {
             continue;

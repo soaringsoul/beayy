@@ -105,6 +105,8 @@ pub struct Activity {
 
 pub struct Summarizer {
     pub root: PathBuf,
+    /// 只读的补充数据根：测试版（影子目录）把正式目录的采集事件也算进时长，免得只剩测试版启动后的那一截
+    extra: Vec<PathBuf>,
 }
 
 fn seg_start(name: &str) -> DateTime<Utc> {
@@ -214,7 +216,37 @@ fn py_round(x: f64) -> i64 {
 
 impl Summarizer {
     pub fn new(root: PathBuf) -> Self {
-        Summarizer { root }
+        let extra = if beayy_core::shadow_mode() && root != beayy_core::default_root() { vec![beayy_core::default_root()] } else { vec![] };
+        Summarizer { root, extra }
+    }
+
+    /// 补充根里的电脑设备目录
+    fn extra_devices(&self) -> Vec<PathBuf> {
+        self.extra.iter().flat_map(|r| read_dir_sorted(&r.join("devices"))).filter(|d| d.file_name().map(|x| is_computer(&x.to_string_lossy())).unwrap_or(false)).collect()
+    }
+
+    /// 本根里最早一条采集事件的时间：补充根（正式目录）的事件只取这之前的，
+    /// 之后都以本根为准（两个版本同时在采的那几分钟不重复算）
+    fn handoff(&self) -> Option<DateTime<Utc>> {
+        if self.extra.is_empty() {
+            return None;
+        }
+        let mut best: Option<DateTime<Utc>> = None;
+        for dev in read_dir_sorted(&self.devices()) {
+            if !dev.file_name().map(|x| is_computer(&x.to_string_lossy())).unwrap_or(false) {
+                continue;
+            }
+            for seg in read_dir_sorted(&dev.join("segments")) {
+                let f = seg.join("events.jsonl");
+                let Ok(text) = fs::read_to_string(&f) else { continue };
+                let first = text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter_map(|v| v.get("timestamp").and_then(Value::as_str).and_then(|x| DateTime::parse_from_rfc3339(x).ok())).map(|x| x.with_timezone(&Utc)).min();
+                if let Some(a) = first {
+                    best = Some(best.map_or(a, |b| b.min(a)));
+                    break; // 分段目录已按名字排序，第一个有事件的就是最早的
+                }
+            }
+        }
+        best
     }
 
     fn devices(&self) -> PathBuf {
@@ -240,6 +272,14 @@ impl Summarizer {
                 }
             }
         }
+        for dev in self.extra_devices() {
+            for seg in read_dir_sorted(&dev.join("segments")) {
+                let name = seg.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+                if SEG_RE.is_match(&name) && seg.join("events.jsonl").is_file() {
+                    out.insert(name);
+                }
+            }
+        }
         out.into_iter().collect()
     }
 
@@ -254,7 +294,16 @@ impl Summarizer {
 
     /// 各台电脑同一分段的事件合在一起，按解析后的时间排（旧事件带 +08:00、新的是 UTC）；坏行跳过
     fn load(&self, name: &str) -> Vec<Ev> {
-        self.load_files(self.seg_files(name))
+        let mut out = self.load_files(self.seg_files(name));
+        if !self.extra.is_empty() {
+            let extra: Vec<PathBuf> = self.extra_devices().into_iter().map(|d| d.join("segments").join(name).join("events.jsonl")).filter(|p| p.is_file()).collect();
+            if !extra.is_empty() {
+                let cut = self.handoff();
+                out.extend(self.load_files(extra).into_iter().filter(|e| cut.map(|c| ts(e) < c).unwrap_or(true)));
+                out.sort_by_key(ts);
+            }
+        }
+        out
     }
 
     /// 只读本机这台电脑的事件：写 10 分钟摘要用。同一个 10 分钟两台电脑都在用时，各写各的，时间线上分开显示
