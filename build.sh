@@ -30,6 +30,7 @@ if [ -n "${BEAYY_SIGN_ID:-}" ]; then SIGN_ID="$BEAYY_SIGN_ID"
 else SIGN_ID="$(pick "Developer ID Application")"; [ -n "$SIGN_ID" ] || SIGN_ID="$(pick "Apple Development")"
 fi
 [ -n "$SIGN_ID" ] || SIGN_ID="-"
+# adhoc（SIGN_ID=-）每次重编 CDHash 都变，系统设置里旧授权绑不上；装完若仍显示未授权／签名未生效，到系统设置把 Beayy 关掉再打开
 NAME=$([ "$MODE" = release ] && echo Beayy || echo Beayy-rs)
 DIST="$HERE/target/dist/$NAME.app"
 DEST="$HOME/Applications/$NAME.app"

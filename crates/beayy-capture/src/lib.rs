@@ -14,11 +14,16 @@ use macos as platform_impl;
 use windows as platform_impl;
 
 /// 权限状态。Windows 上没有这些系统授权，一律视为已授权。
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+/// `*_label`：布尔为 false 时的短文案；签名过期仍显示已开时为「签名未生效」，前端否则显示「未授权」。
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PermissionStatus {
     pub accessibility: bool,
     pub input_monitoring: bool,
     pub full_disk_access: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accessibility_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_monitoring_label: Option<String>,
 }
 
 pub fn permissions() -> PermissionStatus {

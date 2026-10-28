@@ -1493,8 +1493,10 @@ async function renderDevice(id, tab) {
 
 function devOverview(d, st) {
   const perm = st.permissions || {};
-  const permRow = (kind, name, desc) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${desc}</div></div>
-    <span class="mx-status mx-status--${perm[kind] ? "ok" : "warn"}">${perm[kind] ? "已授权" : "未授权"}</span>${perm[kind] ? "" : `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-perm="${kind}">去授权</button>`}</div>`;
+  const permLabel = (kind) => perm[kind] ? "已授权" : (perm[`${kind}_label`] || "未授权");
+  const permDesc = (kind, desc) => (!perm[kind] && perm[`${kind}_label`]) ? "系统里还开着，但当前签名未生效，请关掉再打开" : desc;
+  const permRow = (kind, name, desc) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${permDesc(kind, desc)}</div></div>
+    <span class="mx-status mx-status--${perm[kind] ? "ok" : "warn"}">${permLabel(kind)}</span>${perm[kind] ? "" : `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-perm="${kind}">去授权</button>`}</div>`;
   const stats = `<div class="mx-stats dev-stats">
       <div class="mx-stat"><div class="mx-stat-label">记录从</div><div class="mx-stat-value mx-num">${esc(mdhm(d.first) || "—")}</div></div>
       <div class="mx-stat"><div class="mx-stat-label">最近一条</div><div class="mx-stat-value mx-num">${esc(ymdhm(d.last) || "—")}</div></div>
@@ -2363,8 +2365,10 @@ async function renderOnboarding() {
   const perm = st.permissions || {};
   const steps = ["这是什么", "授权", "模型", "同步"];
   const dots = `<div class="ob-steps">${steps.map((x, i) => `<span class="${i === OB.step ? "is-on" : i < OB.step ? "done" : ""}">${i + 1}. ${x}</span>`).join("")}</div>`;
-  const permRow = (kind, name, desc) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${desc}</div></div>
-    <span class="mx-status mx-status--${perm[kind] ? "ok" : "warn"}">${perm[kind] ? "已授权" : "未授权"}</span>${perm[kind] ? "" : `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-perm="${kind}">去授权</button>`}</div>`;
+  const permLabel = (kind) => perm[kind] ? "已授权" : (perm[`${kind}_label`] || "未授权");
+  const permDesc = (kind, desc) => (!perm[kind] && perm[`${kind}_label`]) ? "系统里还开着，但当前签名未生效，请关掉再打开" : desc;
+  const permRow = (kind, name, desc) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${permDesc(kind, desc)}</div></div>
+    <span class="mx-status mx-status--${perm[kind] ? "ok" : "warn"}">${permLabel(kind)}</span>${perm[kind] ? "" : `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-perm="${kind}">去授权</button>`}</div>`;
   const msg = (OB.err ? `<div class="mx-field-error">${esc(OB.err)}</div>` : "") + (OB.msg ? `<p class="note">${esc(OB.msg)}</p>` : "");
   const body = [
     `<h1 class="ob-title">Be Authentic. Your Yesterdays.</h1>

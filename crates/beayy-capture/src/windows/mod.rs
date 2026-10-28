@@ -54,7 +54,7 @@ static SHUT: AtomicBool = AtomicBool::new(false);
 
 pub fn permissions() -> PermissionStatus {
     // Windows 没有对应的系统授权
-    PermissionStatus { accessibility: true, input_monitoring: true, full_disk_access: true }
+    PermissionStatus { accessibility: true, input_monitoring: true, full_disk_access: true, accessibility_label: None, input_monitoring_label: None }
 }
 
 pub fn open_permission(_kind: &str) {}

@@ -36,16 +36,113 @@ use std::time::Duration;
 
 static HANDLE: OnceLock<Handle> = OnceLock::new();
 
+/// 系统设置里还开着，但绑定的是旧 CDHash（adhoc 重编常见）时给 UI 的短文案
+const STALE_PERM_LABEL: &str = "签名未生效";
+
 pub fn permissions() -> PermissionStatus {
+    let accessibility = unsafe { ffi::AXIsProcessTrusted() };
+    let input_monitoring = unsafe { ffi::CGPreflightListenEventAccess() };
+    // 完全磁盘访问没有查询接口，直接试读受保护的 Biome 目录
+    let full_disk_access = std::fs::read_dir(
+        std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+            .join("Library/Biome/streams/restricted/App.InFocus/remote"),
+    )
+    .is_ok();
+
+    let mut accessibility_label = None;
+    let mut input_monitoring_label = None;
+    if !accessibility || !input_monitoring {
+        let stale = stale_permission_flags();
+        if !accessibility && stale.0 {
+            accessibility_label = Some(STALE_PERM_LABEL.to_string());
+        }
+        if !input_monitoring && stale.1 {
+            input_monitoring_label = Some(STALE_PERM_LABEL.to_string());
+        }
+    }
+
     PermissionStatus {
-        accessibility: unsafe { ffi::AXIsProcessTrusted() },
-        input_monitoring: unsafe { ffi::CGPreflightListenEventAccess() },
-        // 完全磁盘访问没有查询接口，直接试读受保护的 Biome 目录
-        full_disk_access: std::fs::read_dir(
-            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-                .join("Library/Biome/streams/restricted/App.InFocus/remote"),
-        )
-        .is_ok(),
+        accessibility,
+        input_monitoring,
+        full_disk_access,
+        accessibility_label,
+        input_monitoring_label,
+    }
+}
+
+/// (辅助功能过期, 输入监控过期)。API 已是 true 的项调用方不会用这里的结果。
+fn stale_permission_flags() -> (bool, bool) {
+    let sig = signing();
+    let cdhash = sig.get("cdhash").and_then(|v| v.as_str()).unwrap_or("").to_ascii_lowercase();
+    let team = sig.get("team").and_then(|v| v.as_str()).unwrap_or("");
+    let identifier = sig
+        .get("identifier")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("com.fengli.beayy");
+
+    if let Some(flags) = stale_from_tcc(identifier, &cdhash) {
+        return flags;
+    }
+    // 读不到 TCC.db（通常缺完全磁盘访问）时：adhoc／无团队签名几乎必绑不上旧授权
+    let adhoc = team.is_empty() || team == "not set" || team == "-";
+    if adhoc {
+        (true, true)
+    } else {
+        (false, false)
+    }
+}
+
+/// 读系统／用户 TCC.db：auth_value=2 且 csreq 不含当前 CDHash → 过期授权。
+/// 读失败（无 FDA 等）返回 None，走 adhoc 兜底。
+fn stale_from_tcc(client: &str, current_cdhash: &str) -> Option<(bool, bool)> {
+    if current_cdhash.is_empty() {
+        return None;
+    }
+    let mut paths = vec![std::path::PathBuf::from("/Library/Application Support/com.apple.TCC/TCC.db")];
+    if let Ok(home) = std::env::var("HOME") {
+        paths.push(std::path::PathBuf::from(home).join("Library/Application Support/com.apple.TCC/TCC.db"));
+    }
+    let client_sql = client.replace("'", "''");
+    let sql = format!(
+        "SELECT service, auth_value, hex(csreq) FROM access WHERE client='{client_sql}' AND service IN ('kTCCServiceAccessibility','kTCCServiceListenEvent');"
+    );
+    let mut ax_stale = false;
+    let mut im_stale = false;
+    let mut any_ok = false;
+    for path in &paths {
+        let Some(p) = path.to_str() else { continue };
+        let Ok(out) = std::process::Command::new("/usr/bin/sqlite3").args([p, &sql]).output() else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        any_ok = true;
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            let mut parts = line.splitn(3, '|');
+            let (Some(service), Some(auth_s), Some(csreq_hex)) = (parts.next(), parts.next(), parts.next()) else {
+                continue;
+            };
+            if auth_s.parse::<i32>().unwrap_or(0) != 2 {
+                continue;
+            }
+            let hex = csreq_hex.to_ascii_lowercase();
+            if hex.contains(current_cdhash) {
+                continue;
+            }
+            match service {
+                "kTCCServiceAccessibility" => ax_stale = true,
+                "kTCCServiceListenEvent" => im_stale = true,
+                _ => {}
+            }
+        }
+    }
+    if any_ok {
+        Some((ax_stale, im_stale))
+    } else {
+        None
     }
 }
 
