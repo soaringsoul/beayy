@@ -2786,8 +2786,13 @@ setTimeout(async () => {
   let st; try { st = await TAURI.invoke("get_status"); } catch (e) { return; }
   if (!st || !st.perf) return;
   PERF.cycle = true;
-  for (let r = 0; r < 3; r++) for (const h of ["#/summary", "#/rules", "#/todos", "#/devices", "#/today"]) {
+  for (let r = 0; r < (st.perf === "daily" ? 0 : 3); r++) for (const h of ["#/summary", "#/rules", "#/todos", "#/devices", "#/today"]) {
     location.hash = h; await new Promise((ok) => setTimeout(ok, 2500));
+  }
+  if (st.perf === "daily") {
+    const d = localDay(), t1 = performance.now();
+    try { await call("generate_daily", { date: d }); perfNote(`generate_daily 成功 ${Math.round(performance.now() - t1)}ms`); }
+    catch (x) { perfNote(`generate_daily 失败 ${Math.round(performance.now() - t1)}ms：${x}`); }
   }
   perfNote("自测结束");
 }, 6000);

@@ -97,7 +97,7 @@ fn get_status(state: tauri::State<'_, Arc<AppState>>) -> Result<Value, String> {
         "device": state.log.device,
         "version": env!("CARGO_PKG_VERSION"),
         "shadow": shadow_mode(),
-        "perf": std::env::var("BEAYY_PERF").is_ok(),
+        "perf": std::env::var("BEAYY_PERF").ok(),
     }))
 }
 

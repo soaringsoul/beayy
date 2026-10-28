@@ -1039,6 +1039,8 @@ fn summary_of(repo: &Option<PathBuf>, date: &str) -> Option<String> {
     repo.as_ref()
         .and_then(|r| fs::read_to_string(r.join("日总结").join(&name)).ok())
         .or_else(|| fs::read_to_string(data_root().join("daily").join(&name)).ok())
+        // 测试版（影子目录）也认正式版写的日总结
+        .or_else(|| fs::read_to_string(default_root().join("daily").join(&name)).ok())
 }
 
 fn computer_hours(c: &Value) -> Value {

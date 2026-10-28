@@ -2,15 +2,16 @@
 //! 数字（在电脑前、手机、领域和项目、类型、规矩守没守住）由代码算好填进去；模型只写一句话、做成了什么、偏离、明天。
 //! 写到 Beayy/daily/日总结_YYYYMMDD.md。每天 21:30 写当天，次日 0:15 用完整的一天重写一次；页面上也可以随时生成。
 
-use beayy_core::default_root;
+use beayy_core::data_root;
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use regex::Regex;
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
+/// 日总结写在当前数据根下（测试版是影子目录，和总结页读的是同一处）
 pub fn path_of(date: NaiveDate) -> PathBuf {
-    default_root().join("daily").join(format!("日总结_{}.md", date.format("%Y%m%d")))
+    data_root().join("daily").join(format!("日总结_{}.md", date.format("%Y%m%d")))
 }
 
 // ---------- 规矩：和页面上同一套识别规则 ----------
@@ -188,8 +189,8 @@ pub fn generate(date: NaiveDate) -> Result<String, String> {
         user += &format!("规矩：\n{}\n\n", rules.iter().map(|(t, d, ok)| format!("- {t}：{d}{}", match ok { Some(true) => "，守住了", Some(false) => "，没守住", None => "" })).collect::<Vec<_>>().join("\n"));
     }
     user += &format!("每小时：\n{}\n\n最近：\n{}\n", hours.join("\n"), recent.join("\n"));
-    let sm = beayy_summary::Summarizer::new(default_root());
-    let j = sm.ask(PROMPT, &user)?;
+    let sm = beayy_summary::Summarizer::new(data_root());
+    let j = sm.ask(PROMPT, &user).map_err(|e| format!("模型调用失败：{e}"))?;
     let list = |k: &str| -> String {
         let v: Vec<String> = j.get(k).and_then(Value::as_array).cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(|s| format!("- {s}"))).collect();
         if v.is_empty() { "- 没有".into() } else { v.join("\n") }
@@ -211,8 +212,8 @@ pub fn generate(date: NaiveDate) -> Result<String, String> {
     }
     md += &format!("\n## 偏离\n\n{}\n\n## 明天\n\n{}\n", list("drift"), list("tomorrow"));
     let p = path_of(date);
-    fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
-    fs::write(&p, &md).map_err(|e| e.to_string())?;
+    fs::create_dir_all(p.parent().unwrap()).map_err(|e| format!("建不了目录 {}：{e}", p.parent().unwrap().display()))?;
+    fs::write(&p, &md).map_err(|e| format!("写不进 {}：{e}", p.display()))?;
     Ok(md)
 }
 
@@ -220,7 +221,8 @@ pub fn generate(date: NaiveDate) -> Result<String, String> {
 #[tauri::command]
 pub async fn generate_daily(date: String) -> Result<String, String> {
     let d = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|e| e.to_string())?;
-    generate(d)
+    // 生成要调模型、可能等上几十秒：放到阻塞线程里跑，不占异步线程
+    tauri::async_runtime::spawn_blocking(move || generate(d)).await.map_err(|e| format!("生成线程出错：{e}"))?
 }
 
 /// 定时：每天 21:30 写当天；次日 0:15 以后，前一天那份如果是当天晚上写的，用完整的一天重写一次
