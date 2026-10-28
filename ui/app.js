@@ -1304,20 +1304,104 @@ async function renderSummary(arg) {
 
 const NS = { tab: "todos", deleting: null }; // tab: todos | memos
 
-function todoDialog(item, save) {
+/** 四象限：1 重要且紧急 · 2 重要不紧急 · 3 不重要但紧急 · 4 不重要不紧急 */
+const QUADS = [
+  { id: 1, roman: "I", name: "重要且紧急", short: "且紧急", cls: "q1" },
+  { id: 2, roman: "II", name: "重要不紧急", short: "不紧急", cls: "q2" },
+  { id: 3, roman: "III", name: "不重要但紧急", short: "但紧急", cls: "q3" },
+  { id: 4, roman: "IV", name: "不重要不紧急", short: "不紧急", cls: "q4" },
+];
+const quadOf = (t) => {
+  const n = +((t && t.quadrant) || 4);
+  return (n >= 1 && n <= 4) ? n : 4;
+};
+const quadMeta = (id) => QUADS.find((q) => q.id === id) || QUADS[3];
+
+/** due_at：本地 "YYYY-MM-DDTHH:mm" 或 ISO；空＝无日期 */
+const dueParts = (due) => {
+  if (!due) return { date: "", time: "" };
+  const s = String(due);
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
+  if (m) return { date: m[1], time: `${m[2]}:${m[3]}` };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return { date: s, time: "" };
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return { date: "", time: "" };
+  return { date: localDay(d), time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}` };
+};
+const dueJoin = (date, time) => {
+  if (!date) return "";
+  return time ? `${date}T${time}` : `${date}T23:59`;
+};
+const dueLabel = (due) => {
+  const { date, time } = dueParts(due);
+  if (!date) return "";
+  const t = time && time !== "23:59" ? ` ${time}` : "";
+  return `${date.slice(5).replace("-", "/")}${t}`;
+};
+const dueOverdue = (due) => {
+  if (!due) return false;
+  const { date, time } = dueParts(due);
+  if (!date) return false;
+  const end = new Date(`${date}T${time || "23:59"}:00`);
+  return end.getTime() < Date.now();
+};
+const normalizeTodo = (t) => {
+  if (!t || typeof t !== "object") return t;
+  if (t.quadrant == null) t.quadrant = 4;
+  if (t.due_at == null) t.due_at = "";
+  return t;
+};
+
+function todoDialog(item, save, presetQuad) {
+  const q0 = item ? quadOf(item) : (presetQuad || 4);
+  const dp = dueParts(item && item.due_at);
+  const flags = QUADS.map((q) => `<button type="button" class="todo-qbtn ${q.cls}${q.id === q0 ? " is-on" : ""}" data-q="${q.id}" title="${esc(q.name)}" aria-pressed="${q.id === q0}"><span class="todo-qbadge">${q.roman}</span><span class="todo-qlabel">${esc(q.name)}</span></button>`).join("");
   openDialog({
     title: item ? "改待办" : "加一条待办", ok: item ? "保存改动" : "加上这条",
-    body: `<div class="mx-field"><label for="todo-text">待办</label><textarea class="mx-input dlg-ta" id="todo-text" placeholder="要做什么">${esc(item ? item.text : "")}</textarea>
-      <p class="note">只存在这台电脑，⌘↩ 保存。</p></div>`,
+    body: `<div class="todo-dlg">
+      <div class="mx-field"><label for="todo-text">准备做什么？</label>
+        <textarea class="mx-input dlg-ta" id="todo-text" placeholder="准备做什么？">${esc(item ? item.text : "")}</textarea></div>
+      <div class="mx-field"><label>日期与时间（可空＝无日期）</label>
+        <div class="todo-due">
+          <input class="mx-input" type="date" id="todo-date" value="${esc(dp.date)}" aria-label="日期">
+          <input class="mx-input" type="time" id="todo-time" value="${esc(dp.time)}" aria-label="时间">
+          <button type="button" class="mx-btn mx-btn--secondary mx-btn--sm" id="todo-due-clear">清除</button>
+        </div></div>
+      <div class="mx-field"><label>优先级（四象限）</label>
+        <div class="todo-qgrid" id="todo-quad" role="group" aria-label="四象限">${flags}</div>
+        <input type="hidden" id="todo-quadrant" value="${q0}">
+      </div>
+      <p class="note">只存在这台电脑，⌘↩ 保存。</p>
+    </div>`,
+    onOpen: (el) => {
+      const hid = el.querySelector("#todo-quadrant");
+      el.querySelector("#todo-quad").onclick = (e) => {
+        const b = e.target.closest("[data-q]"); if (!b) return;
+        el.querySelectorAll("#todo-quad [data-q]").forEach((x) => {
+          const on = x === b;
+          x.classList.toggle("is-on", on);
+          x.setAttribute("aria-pressed", String(on));
+        });
+        hid.value = b.dataset.q;
+      };
+      el.querySelector("#todo-due-clear").onclick = () => {
+        el.querySelector("#todo-date").value = "";
+        el.querySelector("#todo-time").value = "";
+      };
+    },
     submit: async (el) => {
       const text = dlgVal(el, "todo-text");
-      if (!text) throw "先写一条待办。";
+      if (!text) throw "先写准备做什么。";
+      const date = (el.querySelector("#todo-date").value || "").trim();
+      const time = (el.querySelector("#todo-time").value || "").trim();
+      const due_at = dueJoin(date, time);
+      const quadrant = Math.min(4, Math.max(1, +el.querySelector("#todo-quadrant").value || 4));
       const now = new Date().toISOString();
       if (item) {
         const x = S.todos.find((t) => t.id === item.id);
-        x.text = text; x.updated = now;
+        x.text = text; x.due_at = due_at; x.quadrant = quadrant; x.updated = now;
       } else {
-        S.todos.unshift({ id: "t" + Date.now().toString(36), text, done: false, created: now, updated: now });
+        S.todos.unshift({ id: "t" + Date.now().toString(36), text, done: false, due_at, quadrant, created: now, updated: now });
       }
       await save();
     },
@@ -1346,15 +1430,46 @@ function memoDialog(item, save) {
   });
 }
 
+/** 一条待办在象限里的行 */
+function todoBoardRow(t) {
+  const over = !t.done && dueOverdue(t.due_at);
+  const due = dueLabel(t.due_at);
+  const q = quadMeta(quadOf(t));
+  return `<div class="todo qrow${t.done ? " done" : ""}${over ? " overdue" : ""}" data-id="${t.id}">
+    <div class="mx-row">
+      <button class="todo-check ${q.cls}" role="checkbox" aria-checked="${!!t.done}" aria-label="${t.done ? "标成未完成" : "标成完成"}" data-act="toggle">${t.done ? ICON.check : ""}</button>
+      <div class="mx-row-main">
+        <div class="mx-row-name">${esc(t.text)}</div>
+        <div class="todo-meta">${due ? `<span class="todo-due-l${over ? " over" : ""}">${over ? "已过期 · " : ""}${esc(due)}</span>` : `<span class="todo-due-l muted">无日期</span>`}</div>
+      </div>
+      <div class="acts"><button class="mx-btn mx-btn--text mx-btn--sm" data-act="edit">改</button><button class="mx-btn mx-btn--text mx-btn--sm" data-act="delete">删除</button></div>
+    </div>
+    ${NS.deleting === t.id ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>删除这条待办？</b><span>删了找不回来。</span></div><button class="mx-btn mx-btn--secondary" data-act="keep">取消</button><button class="mx-btn mx-btn--danger" data-act="remove">删除这条</button></div>` : ""}
+  </div>`;
+}
+
+/** 象限内：已过期 / 有日期 / 无日期 */
+function todoQuadBody(items) {
+  if (!items.length) return `<p class="todo-empty">没有任务</p>`;
+  const overdue = items.filter((t) => dueOverdue(t.due_at));
+  const dated = items.filter((t) => t.due_at && !dueOverdue(t.due_at));
+  const none = items.filter((t) => !t.due_at);
+  const blk = (title, xs) => xs.length ? `<div class="todo-group"><div class="todo-group-h">${esc(title)} <span class="n">${xs.length}</span></div>${xs.map(todoBoardRow).join("")}</div>` : "";
+  return blk("已过期", overdue) + blk("有日期", dated) + blk("无日期", none);
+}
+
 async function renderNotes(arg) {
   NS.tab = arg === "memos" ? "memos" : "todos";
   if (!S.todos) S.todos = await call("get_todos");
   if (!S.memos) S.memos = await call("get_memos");
   if (!Array.isArray(S.todos)) S.todos = [];
   if (!Array.isArray(S.memos)) S.memos = [];
+  S.todos.forEach(normalizeTodo);
+  $app.classList.toggle("wide", NS.tab === "todos");
 
+  const openCount = S.todos.filter((t) => !t.done).length;
   const tabs = `<div class="tabs" role="tablist">
-    <button role="tab" aria-selected="${NS.tab === "todos"}" class="${NS.tab === "todos" ? "is-on" : ""}" data-ntab="todos">待办<span class="n">${S.todos.filter((t) => !t.done).length}</span></button>
+    <button role="tab" aria-selected="${NS.tab === "todos"}" class="${NS.tab === "todos" ? "is-on" : ""}" data-ntab="todos">待办<span class="n">${openCount}</span></button>
     <button role="tab" aria-selected="${NS.tab === "memos"}" class="${NS.tab === "memos" ? "is-on" : ""}" data-ntab="memos">备忘<span class="n">${S.memos.length}</span></button>
   </div>`;
 
@@ -1364,22 +1479,28 @@ async function renderNotes(arg) {
   if (NS.tab === "todos") {
     const open = S.todos.filter((t) => !t.done);
     const done = S.todos.filter((t) => t.done);
-    const row = (t) => `<div class="todo${t.done ? " done" : ""}" data-id="${t.id}">
-      <div class="mx-row">
-        <button class="todo-check" role="checkbox" aria-checked="${!!t.done}" aria-label="${t.done ? "标成未完成" : "标成完成"}" data-act="toggle">${t.done ? ICON.check : ""}</button>
-        <div class="mx-row-main"><div class="mx-row-name">${esc(t.text)}</div></div>
-        <div class="acts"><button class="mx-btn mx-btn--text mx-btn--sm" data-act="edit">改</button><button class="mx-btn mx-btn--text mx-btn--sm" data-act="delete">删除</button></div>
-      </div>
-      ${NS.deleting === t.id ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>删除这条待办？</b><span>删了找不回来。</span></div><button class="mx-btn mx-btn--secondary" data-act="keep">取消</button><button class="mx-btn mx-btn--danger" data-act="remove">删除这条</button></div>` : ""}
-    </div>`;
+    const cells = QUADS.map((q) => {
+      const xs = open.filter((t) => quadOf(t) === q.id);
+      return `<section class="todo-cell ${q.cls}" data-quad="${q.id}">
+        <header class="todo-cell-h">
+          <span class="todo-qbadge">${q.roman}</span>
+          <div class="todo-cell-t"><b>${esc(q.name)}</b><span class="n">${xs.length}</span></div>
+          <button type="button" class="mx-iconbtn" data-act="add-q" data-q="${q.id}" aria-label="加到${esc(q.name)}" title="加到此象限">+</button>
+        </header>
+        <div class="todo-cell-b">${todoQuadBody(xs)}</div>
+      </section>`;
+    }).join("");
+
     $app.innerHTML = header("待办", `<button class="mx-btn mx-btn--primary" id="add">加一条待办</button>`)
       + `<div class="toolbar">${tabs}</div>`
-      + `<div class="reading" id="notes">
-        ${open.length ? open.map(row).join("") : emptyInline("还没有待办，记下要做的事")}
-        ${done.length ? section("已完成", done.map(row).join(""), { count: done.length }) : ""}
+      + `<div class="reading todo-board-wrap" id="notes">
+        <div class="todo-board" role="list">${cells}</div>
+        ${done.length ? section("已完成", done.map(todoBoardRow).join(""), { count: done.length }) : ""}
       </div>`;
-    document.getElementById("add").onclick = () => { NS.deleting = null; todoDialog(null, saveTodos); };
+    document.getElementById("add").onclick = () => { NS.deleting = null; todoDialog(null, saveTodos, 4); };
     document.getElementById("notes").onclick = async (e) => {
+      const addQ = e.target.closest('[data-act="add-q"]');
+      if (addQ) { NS.deleting = null; return todoDialog(null, saveTodos, +addQ.dataset.q); }
       const b = e.target.closest("[data-act]"); if (!b) return;
       const box = b.closest("[data-id]"); if (!box) return;
       const id = box.dataset.id, act = b.dataset.act;
@@ -1390,7 +1511,6 @@ async function renderNotes(arg) {
       if (act === "toggle") {
         const x = S.todos.find((t) => t.id === id);
         x.done = !x.done; x.updated = new Date().toISOString();
-        // 完成的沉底，未完成的保持原相对顺序靠前
         S.todos = [...S.todos.filter((t) => !t.done), ...S.todos.filter((t) => t.done)];
         return saveTodos();
       }
@@ -1429,7 +1549,6 @@ async function renderNotes(arg) {
     };
   }
 
-  // 页签也挂在 toolbar 上
   $app.querySelector(".toolbar").onclick = (e) => {
     const tab = e.target.closest("[data-ntab]"); if (!tab) return;
     NS.deleting = null;
@@ -2584,6 +2703,8 @@ async function route() {
   if (DLG && DLG.closable) closeDialog();
   S.page = ["today", "summary", "rules", "todos", "devices", "settings"].includes(page) ? page : "today";
   markNav(S.page);
+  // 四象限待办用宽版；其它页（除今天自己会 toggle）先收掉
+  if (S.page !== "todos" && S.page !== "today") $app.classList.remove("wide");
   try {
     if (!S.days.length && !S.status) await boot();
     if (!S.settings) { S.settings = await call("get_settings"); S.draft = JSON.parse(JSON.stringify(S.settings)); }
