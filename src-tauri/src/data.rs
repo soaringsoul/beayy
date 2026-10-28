@@ -1275,6 +1275,40 @@ pub fn save_rules(rules: Value) -> Result<(), String> {
     fs::write(rules_path(), serde_json::to_string_pretty(&rules).unwrap()).map_err(|e| e.to_string())
 }
 
+// ---------- 本地待办／备忘（不对接滴答，只存本机） ----------
+
+fn todos_path() -> PathBuf {
+    default_root().join("todos.json")
+}
+
+fn memos_path() -> PathBuf {
+    default_root().join("memos.json")
+}
+
+fn read_json_array(path: &PathBuf) -> Value {
+    fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!([]))
+}
+
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn get_todos() -> Value {
+    read_json_array(&todos_path())
+}
+
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn save_todos(todos: Value) -> Result<(), String> {
+    write_json(&todos_path(), &todos)
+}
+
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn get_memos() -> Value {
+    read_json_array(&memos_path())
+}
+
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn save_memos(memos: Value) -> Result<(), String> {
+    write_json(&memos_path(), &memos)
+}
+
 
 /// settings.json 的键沿用 Python 摘要脚本的叫法（summary_model、daily_model、blacklist），对网页换成 COMMANDS.md 的叫法
 #[cfg_attr(not(beayy_mobile), tauri::command)]

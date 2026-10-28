@@ -1,4 +1,4 @@
-// Beayy 网页界面：今天、日总结、规矩、设置四页。纯 JS，不用打包工具。
+// Beayy 网页界面：今天、日总结、规矩、待办／备忘、设置。纯 JS，不用打包工具。
 // 取数：Tauri 里用 window.__TAURI__.core.invoke（命令见 app/src-tauri/COMMANDS.md）；
 // 浏览器里读 mock/<命令名>.json（双击 file:// 打开时改读 mock/mock.js）。
 // 作息图、一天的形状、读数的画法取自 网站/static/app.js（设计系统「人生记录」）。
@@ -40,11 +40,15 @@ async function call(cmd, args = {}) {
   // 浏览器里：写操作只改内存，读操作读样例
   switch (cmd) {
     case "save_rules": mockState.rules = args.rules; return null;
+    case "save_todos": mockState.todos = args.todos; return null;
+    case "save_memos": mockState.memos = args.memos; return null;
     case "save_settings": mockState.settings = { ...(mockState.settings || await loadMock("get_settings")), ...args.settings }; return null;
     case "set_api_key": mockState.hasKey = true; return null;
     case "set_paused": mockState.paused = args.paused; return null;
     case "open_permission": case "open_data_dir": console.info(`样例模式：${cmd}`, args); return null;
     case "get_rules": return mockState.rules || loadMock("get_rules");
+    case "get_todos": return mockState.todos || loadMock("get_todos");
+    case "get_memos": return mockState.memos || loadMock("get_memos");
     case "get_settings": {
       const s = mockState.settings || await loadMock("get_settings");
       if (mockState.hasKey) s.has_api_key = true;
@@ -620,7 +624,7 @@ function actogram(rows, cur) {
 
 // ---------- 状态 ----------
 
-const S = { days: [], status: null, page: "today", rules: null, settings: null, draft: null };
+const S = { days: [], status: null, page: "today", rules: null, todos: null, memos: null, settings: null, draft: null };
 
 async function boot() {
   [S.days, S.status, S.sync, S.profile] = await Promise.all([call("list_days"), call("get_status"), call("sync_status").catch(() => ({})), call("get_profile").catch(() => ({ name: "我" }))]);
@@ -1295,8 +1299,148 @@ async function renderSummary(arg) {
   menu.onclick = (e) => { const b = e.target.closest("button"); if (b) go(b.dataset.date); };
 }
 
-// ---------- 规矩 ----------
 
+// ---------- 待办／备忘（本机，不对接滴答） ----------
+
+const NS = { tab: "todos", deleting: null }; // tab: todos | memos
+
+function todoDialog(item, save) {
+  openDialog({
+    title: item ? "改待办" : "加一条待办", ok: item ? "保存改动" : "加上这条",
+    body: `<div class="mx-field"><label for="todo-text">待办</label><textarea class="mx-input dlg-ta" id="todo-text" placeholder="要做什么">${esc(item ? item.text : "")}</textarea>
+      <p class="note">只存在这台电脑，⌘↩ 保存。</p></div>`,
+    submit: async (el) => {
+      const text = dlgVal(el, "todo-text");
+      if (!text) throw "先写一条待办。";
+      const now = new Date().toISOString();
+      if (item) {
+        const x = S.todos.find((t) => t.id === item.id);
+        x.text = text; x.updated = now;
+      } else {
+        S.todos.unshift({ id: "t" + Date.now().toString(36), text, done: false, created: now, updated: now });
+      }
+      await save();
+    },
+  });
+}
+
+function memoDialog(item, save) {
+  openDialog({
+    title: item ? "改备忘" : "写一条备忘", ok: item ? "保存改动" : "存好",
+    body: `<div class="mx-field"><label for="memo-title">标题（可选）</label><input class="mx-input" id="memo-title" value="${esc(item ? (item.title || "") : "")}" placeholder="一句话标题"></div>
+      <div class="mx-field"><label for="memo-body">内容</label><textarea class="mx-input dlg-ta dlg-ta--lg" id="memo-body" placeholder="随便记">${esc(item ? (item.body || "") : "")}</textarea>
+      <p class="note">只存在这台电脑，⌘↩ 保存。</p></div>`,
+    submit: async (el) => {
+      const title = dlgVal(el, "memo-title");
+      const body = dlgVal(el, "memo-body");
+      if (!title && !body) throw "标题和内容至少写一样。";
+      const now = new Date().toISOString();
+      if (item) {
+        const x = S.memos.find((m) => m.id === item.id);
+        x.title = title; x.body = body; x.updated = now;
+      } else {
+        S.memos.unshift({ id: "m" + Date.now().toString(36), title, body, created: now, updated: now });
+      }
+      await save();
+    },
+  });
+}
+
+async function renderNotes(arg) {
+  NS.tab = arg === "memos" ? "memos" : "todos";
+  if (!S.todos) S.todos = await call("get_todos");
+  if (!S.memos) S.memos = await call("get_memos");
+  if (!Array.isArray(S.todos)) S.todos = [];
+  if (!Array.isArray(S.memos)) S.memos = [];
+
+  const tabs = `<div class="tabs" role="tablist">
+    <button role="tab" aria-selected="${NS.tab === "todos"}" class="${NS.tab === "todos" ? "is-on" : ""}" data-ntab="todos">待办<span class="n">${S.todos.filter((t) => !t.done).length}</span></button>
+    <button role="tab" aria-selected="${NS.tab === "memos"}" class="${NS.tab === "memos" ? "is-on" : ""}" data-ntab="memos">备忘<span class="n">${S.memos.length}</span></button>
+  </div>`;
+
+  const saveTodos = async () => { await call("save_todos", { todos: S.todos }); renderNotes("todos"); };
+  const saveMemos = async () => { await call("save_memos", { memos: S.memos }); renderNotes("memos"); };
+
+  if (NS.tab === "todos") {
+    const open = S.todos.filter((t) => !t.done);
+    const done = S.todos.filter((t) => t.done);
+    const row = (t) => `<div class="todo${t.done ? " done" : ""}" data-id="${t.id}">
+      <div class="mx-row">
+        <button class="todo-check" role="checkbox" aria-checked="${!!t.done}" aria-label="${t.done ? "标成未完成" : "标成完成"}" data-act="toggle">${t.done ? ICON.check : ""}</button>
+        <div class="mx-row-main"><div class="mx-row-name">${esc(t.text)}</div></div>
+        <div class="acts"><button class="mx-btn mx-btn--text mx-btn--sm" data-act="edit">改</button><button class="mx-btn mx-btn--text mx-btn--sm" data-act="delete">删除</button></div>
+      </div>
+      ${NS.deleting === t.id ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>删除这条待办？</b><span>删了找不回来。</span></div><button class="mx-btn mx-btn--secondary" data-act="keep">取消</button><button class="mx-btn mx-btn--danger" data-act="remove">删除这条</button></div>` : ""}
+    </div>`;
+    $app.innerHTML = header("待办", `<button class="mx-btn mx-btn--primary" id="add">加一条待办</button>`)
+      + `<div class="toolbar">${tabs}</div>`
+      + `<div class="reading" id="notes">
+        ${open.length ? open.map(row).join("") : emptyInline("还没有待办，记下要做的事")}
+        ${done.length ? section("已完成", done.map(row).join(""), { count: done.length }) : ""}
+      </div>`;
+    document.getElementById("add").onclick = () => { NS.deleting = null; todoDialog(null, saveTodos); };
+    document.getElementById("notes").onclick = async (e) => {
+      const b = e.target.closest("[data-act]"); if (!b) return;
+      const box = b.closest("[data-id]"); if (!box) return;
+      const id = box.dataset.id, act = b.dataset.act;
+      if (act === "edit") { NS.deleting = null; return todoDialog(S.todos.find((x) => x.id === id), saveTodos); }
+      if (act === "delete") { NS.deleting = id; return renderNotes("todos"); }
+      if (act === "keep") { NS.deleting = null; return renderNotes("todos"); }
+      if (act === "remove") { S.todos = S.todos.filter((x) => x.id !== id); NS.deleting = null; return saveTodos(); }
+      if (act === "toggle") {
+        const x = S.todos.find((t) => t.id === id);
+        x.done = !x.done; x.updated = new Date().toISOString();
+        // 完成的沉底，未完成的保持原相对顺序靠前
+        S.todos = [...S.todos.filter((t) => !t.done), ...S.todos.filter((t) => t.done)];
+        return saveTodos();
+      }
+    };
+  } else {
+    const row = (m) => {
+      const title = (m.title || "").trim() || ((m.body || "").trim().split("\n")[0] || "（空白备忘）").slice(0, 40);
+      const preview = (m.title || "").trim() ? (m.body || "").trim() : (m.body || "").trim().split("\n").slice(1).join("\n").trim();
+      return `<div class="memo" data-id="${m.id}">
+        <div class="mx-row">
+          <div class="mx-row-main"><div class="mx-row-name">${esc(title)}</div>${preview ? `<div class="memo-body">${esc(preview)}</div>` : ""}<div class="memo-meta">${esc(mdhm(m.updated || m.created) || "")}</div></div>
+          <div class="acts"><button class="mx-btn mx-btn--text mx-btn--sm" data-act="edit">改</button><button class="mx-btn mx-btn--text mx-btn--sm" data-act="delete">删除</button></div>
+        </div>
+        ${NS.deleting === m.id ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>删除这条备忘？</b><span>删了找不回来。</span></div><button class="mx-btn mx-btn--secondary" data-act="keep">取消</button><button class="mx-btn mx-btn--danger" data-act="remove">删除这条</button></div>` : ""}
+      </div>`;
+    };
+    $app.innerHTML = header("备忘", `<button class="mx-btn mx-btn--primary" id="add">写一条备忘</button>`)
+      + `<div class="toolbar">${tabs}</div>`
+      + `<div class="reading" id="notes">
+        ${S.memos.length ? S.memos.map(row).join("") : emptyInline("还没有备忘，随手记一点")}
+      </div>`;
+    document.getElementById("add").onclick = () => { NS.deleting = null; memoDialog(null, saveMemos); };
+    document.getElementById("notes").onclick = async (e) => {
+      const b = e.target.closest("[data-act]");
+      const box = e.target.closest("[data-id]");
+      if (b && box) {
+        const id = box.dataset.id, act = b.dataset.act;
+        if (act === "edit") { NS.deleting = null; return memoDialog(S.memos.find((x) => x.id === id), saveMemos); }
+        if (act === "delete") { NS.deleting = id; return renderNotes("memos"); }
+        if (act === "keep") { NS.deleting = null; return renderNotes("memos"); }
+        if (act === "remove") { S.memos = S.memos.filter((x) => x.id !== id); NS.deleting = null; return saveMemos(); }
+        return;
+      }
+      if (NS.deleting || !box || e.target.closest(".mx-confirm")) return;
+      memoDialog(S.memos.find((x) => x.id === box.dataset.id), saveMemos);
+    };
+  }
+
+  // 页签也挂在 toolbar 上
+  $app.querySelector(".toolbar").onclick = (e) => {
+    const tab = e.target.closest("[data-ntab]"); if (!tab) return;
+    NS.deleting = null;
+    location.hash = tab.dataset.ntab === "memos" ? "#/todos/memos" : "#/todos";
+  };
+  const keepBtn = $app.querySelector('[data-act="keep"]');
+  if (keepBtn) keepBtn.focus();
+  $app.onkeydown = (e) => { if (e.key === "Escape" && NS.deleting) { NS.deleting = null; renderNotes(NS.tab); } };
+}
+
+// ---------- 规矩 ----------
 const RS = { deleting: null };
 
 /** 把一条规矩识别成能算的三类；识别不了返回 null（交给日总结对照）
@@ -2438,7 +2582,7 @@ async function route() {
   const [page = "today", arg, arg2] = location.hash.replace(/^#\/?/, "").split("/");
   // 换页就关掉弹层；刚拿到恢复码那个必须点「我已存好」才关
   if (DLG && DLG.closable) closeDialog();
-  S.page = ["today", "summary", "rules", "devices", "settings"].includes(page) ? page : "today";
+  S.page = ["today", "summary", "rules", "todos", "devices", "settings"].includes(page) ? page : "today";
   markNav(S.page);
   try {
     if (!S.days.length && !S.status) await boot();
@@ -2447,6 +2591,7 @@ async function route() {
     if (S.page !== "devices") { DEV.id = null; stopEventsTimer(); }
     if (S.page === "summary") await renderSummary(arg);
     else if (S.page === "rules") await renderRules();
+    else if (S.page === "todos") await renderNotes(arg);
     else if (S.page === "devices") { if (arg) await renderDevice(decodeURIComponent(arg), arg2); else { DEV.id = null; stopEventsTimer(); await renderDevices(); } }
     else if (S.page === "settings") await renderSettings();
     else { TD.date = /^\d{4}-\d{2}-\d{2}$/.test(arg || "") ? arg : null; await renderToday(); }

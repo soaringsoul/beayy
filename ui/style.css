@@ -317,6 +317,7 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .tabs button:hover:not(:disabled) { color: var(--ink); background: var(--hover); }
 .tabs button.is-on { color: var(--ink); background: var(--hover); }
 .tabs button:disabled { color: var(--ink-disabled, var(--ink-4)); cursor: default; }
+.tabs button .n { margin-left: 6px; font: 11px/16px var(--font-mono); color: var(--ink-4); }
 
 /* Lucide 图标：24 格画布缩到 16 点，线宽 1.75（实际约 1.2 点），比手画的 16 格简笔更细更匀 */
 .mx-ico.lu { stroke-width: 1.75; }
@@ -601,3 +602,24 @@ a.mx-btn { text-decoration: none; }
 }
 .is-tauri .titlebar { z-index: 20; }
 .is-tauri .win-tools { z-index: 21; }
+
+/* ---------- 待办／备忘 ---------- */
+.todo { border-bottom: 1px solid var(--line); }
+.todo .mx-row { height: auto; min-height: var(--list-row); padding: 8px 12px; border-bottom: 0; gap: 10px; }
+.todo .mx-row-name { white-space: normal; }
+.todo.done .mx-row-name { color: var(--ink-3); text-decoration: line-through; }
+.todo .acts { display: flex; gap: 2px; opacity: 0; }
+.todo .mx-row:hover .acts, .todo .mx-row:focus-within .acts { opacity: 1; }
+.todo .mx-confirm { margin: 0 0 var(--space-3); }
+.todo-check { flex: none; width: 22px; height: 22px; margin: 0; border: 1.5px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.todo-check[aria-checked="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+.todo-check .mx-ico { width: 14px; height: 14px; }
+.memo { border-bottom: 1px solid var(--line); }
+.memo .mx-row { height: auto; min-height: var(--list-row); padding: 10px 12px; border-bottom: 0; align-items: flex-start; }
+.memo .mx-row-name { white-space: normal; font-weight: 500; }
+.memo .memo-body { margin-top: 2px; font-size: 13px; line-height: 18px; color: var(--ink-3); white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.memo .memo-meta { margin-top: 4px; font-size: 12px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
+.memo .acts { display: flex; gap: 2px; opacity: 0; }
+.memo .mx-row:hover .acts, .memo .mx-row:focus-within .acts { opacity: 1; }
+.memo .mx-confirm { margin: 0 0 var(--space-3); }
+.dlg-ta--lg { min-height: 160px; }
