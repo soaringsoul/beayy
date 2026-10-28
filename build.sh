@@ -22,15 +22,26 @@ for a in "$@"; do
 done
 # 安装包永远是正式版（10-16 发出过带 BEAYY_SHADOW=1 的 0.2.6／0.2.7 Mac 包：装上的人写影子目录、也不检查更新）
 [ "$DMG" = 1 ] && MODE=release
-# 签名身份：环境变量 BEAYY_SIGN_ID 优先，其次 Developer ID Application，没有再用 Apple Development。
-# 系统授权（辅助功能、输入监控、完全磁盘访问）记在签名要求上：测试版和发布的正式版都用 Developer ID，bundle id 也相同，
-# 授权一次两边都有；换成别的证书就得重新授权。
+# 签名身份：环境变量 BEAYY_SIGN_ID 优先，其次 Developer ID Application，再 Apple Development，
+# 再本机「Beayy Local」（~/.beayy 自签，只给自己用、重编不掉 TCC），实在没有才 adhoc（-）。
+# 系统授权记在签名要求上：Developer ID／Apple Development 绑团队；Beayy Local 绑同一张自签证书；adhoc 每次 CDHash 都变。
 pick() { security find-identity -v -p codesigning 2>/dev/null | grep -o "\"$1[^\"]*\"" | head -1 | tr -d '"' || true; }
+ensure_beayy_local() {
+  [ -n "$(pick "Beayy Local")" ] && return 0
+  local dir="$HOME/.beayy" pass=beayy-local p12="$HOME/.beayy/local-codesign.p12"
+  [ -f "$p12" ] || return 1
+  security import "$p12" -k "$HOME/Library/Keychains/login.keychain-db" -P "$pass" -T /usr/bin/codesign -T /usr/bin/security >/dev/null 2>&1 || true
+  [ -f "$dir/local-codesign.crt" ] && security add-trusted-cert -d -r trustRoot -p codeSign -k "$HOME/Library/Keychains/login.keychain-db" "$dir/local-codesign.crt" >/dev/null 2>&1 || true
+  [ -n "$(pick "Beayy Local")" ]
+}
 if [ -n "${BEAYY_SIGN_ID:-}" ]; then SIGN_ID="$BEAYY_SIGN_ID"
-else SIGN_ID="$(pick "Developer ID Application")"; [ -n "$SIGN_ID" ] || SIGN_ID="$(pick "Apple Development")"
+else
+  SIGN_ID="$(pick "Developer ID Application")"
+  [ -n "$SIGN_ID" ] || SIGN_ID="$(pick "Apple Development")"
+  if [ -z "$SIGN_ID" ]; then ensure_beayy_local || true; SIGN_ID="$(pick "Beayy Local")"; fi
 fi
 [ -n "$SIGN_ID" ] || SIGN_ID="-"
-# adhoc（SIGN_ID=-）每次重编 CDHash 都变，系统设置里旧授权绑不上；装完若仍显示未授权／签名未生效，到系统设置把 Beayy 关掉再打开
+# adhoc（SIGN_ID=-）每次重编 CDHash 都变；有 Beayy Local／Apple 证书时重编不掉权限。adhoc 装完若仍未授权，到系统设置把 Beayy 关掉再打开
 NAME=$([ "$MODE" = release ] && echo Beayy || echo Beayy-rs)
 DIST="$HERE/target/dist/$NAME.app"
 DEST="$HOME/Applications/$NAME.app"
