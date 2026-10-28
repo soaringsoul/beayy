@@ -21,6 +21,24 @@ body { padding: 0; overflow: hidden; }
 /* 照 Claude：侧栏收起就整个藏起来；窗口按钮右边固定一组 收起／后退／前进 */
 :root[data-side="collapsed"] .mx-side { display: none; }
 .titlebar { position: fixed; top: 0; left: 0; right: 0; height: 44px; z-index: 5; }
+/* beayy-window-drag */
+.is-tauri [data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+.is-tauri [data-tauri-drag-region] button,
+.is-tauri [data-tauri-drag-region] a,
+.is-tauri [data-tauri-drag-region] input,
+.is-tauri [data-tauri-drag-region] select,
+.is-tauri [data-tauri-drag-region] textarea,
+.is-tauri [data-tauri-drag-region] .mx-iconbtn,
+.is-tauri [data-tauri-drag-region] .mx-head-right,
+.is-tauri .win-tools,
+.is-tauri .win-tools * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
 /* 三个按钮 28 点高，中线对齐红绿灯（Overlay 标题栏里红绿灯中心在第 16 点） */
 .win-tools { position: fixed; top: 8px; left: 12px; z-index: 6; display: flex; gap: 4px; }
 .is-tauri .win-tools { top: 2px; left: 80px; }
@@ -574,3 +592,12 @@ a.mx-btn { text-decoration: none; }
   .mx-setting .btns { flex-wrap: wrap; }
   .mx-dialog { width: calc(100vw - 24px) !important; max-width: none; }
 }
+
+/* beayy-window-drag-hit */
+.is-tauri .titlebar,
+.is-tauri .mx-side-head {
+  pointer-events: auto;
+  cursor: default;
+}
+.is-tauri .titlebar { z-index: 20; }
+.is-tauri .win-tools { z-index: 21; }

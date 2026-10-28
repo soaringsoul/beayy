@@ -138,7 +138,7 @@ function splitSummary(text) {
 // ---------- 页面骨架 ----------
 
 function header(title, right = "") {
-  return `<header class="mx-head"><div class="mx-head-row" data-tauri-drag-region><h1 class="mx-title">${esc(title)}</h1><div class="mx-head-right">${right}</div></div></header>`;
+  return `<header class="mx-head"><div class="mx-head-row" data-tauri-drag-region><h1 class="mx-title" data-tauri-drag-region>${esc(title)}</h1><div class="mx-head-right">${right}</div></div></header>`;
 }
 const section = (title, body, { count, aside } = {}) =>
   `<section class="mx-sec"><div class="mx-sec-head"><h3>${esc(title)}</h3>${count != null ? `<span class="mx-count">${count}</span>` : ""}${aside ? `<span class="mx-sec-aside">${aside}</span>` : ""}</div>${body}</section>`;
@@ -1224,14 +1224,16 @@ async function loadIcons() {
 const SUM = { err: null };
 
 async function renderSummary(arg) {
-  const dates = S.days.map((x) => x.date);
+  // 同「今天」翻日期：本地今天即使还没进 list_days（摘要未写出）也要能打开总结页
+  const now = localDay();
+  const dates = [...new Set([now, ...S.days.map((x) => x.date)])].sort().reverse();
   const date = dates.includes(arg) ? arg : dates[0];
   if (!date) { $app.innerHTML = header("总结") + emptyInline("还没有日数据。"); return; }
   markNav("summary");
   const i = dates.indexOf(date);
   const prev = dates[i + 1], next = dates[i - 1];
   const d = await call("get_day", { date });
-  const idx = S.days[i];
+  const idx = S.days.find((x) => x.date === date) || {};
   const pack = (d && d.pack) || {}, ph = (d && d.phone) || null;
   // 还没有数据包（通常是今天）：电脑读数用自采事件实时算的
   const c = pack.computer && pack.computer.active_sec != null && !pack.partial ? pack.computer : (d && d.live) || pack.computer || {};
@@ -2487,3 +2489,33 @@ setInterval(async () => {
   document.getElementById("main").scrollTop = y;
 }, 60000);
 route();
+
+
+/* beayy-window-drag-js */
+(function () {
+  if (!window.__TAURI__) return;
+  const noDrag = 'button,a,input,select,textarea,label,.mx-iconbtn,.win-tools,.mx-head-right,.mx-nav';
+  document.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest(noDrag)) return;
+    const region = e.target.closest('[data-tauri-drag-region]');
+    if (!region) return;
+    const start = async () => {
+      try {
+        const w = window.__TAURI__.window;
+        if (w?.getCurrentWindow) {
+          await w.getCurrentWindow().startDragging();
+          return;
+        }
+        if (w?.appWindow?.startDragging) {
+          await w.appWindow.startDragging();
+          return;
+        }
+        // older global path
+        const { getCurrentWindow } = window.__TAURI__.window || {};
+        if (getCurrentWindow) await getCurrentWindow().startDragging();
+      } catch (_) {}
+    };
+    start();
+  }, true);
+})();

@@ -1037,6 +1037,42 @@ fn computer_hours(c: &Value) -> Value {
     Value::Object(m)
 }
 
+/// 电脑自采分段目录名 → 本地日期（还没写成 10 分钟摘要时，总结页也要能看到这些天）
+fn computer_event_dates() -> HashSet<String> {
+    let mut dates = HashSet::new();
+    let Ok(devs) = fs::read_dir(default_root().join("devices")) else { return dates };
+    for dev in devs.filter_map(|e| e.ok()) {
+        let name = dev.file_name().to_string_lossy().to_string();
+        if !beayy_summary::is_computer(&name) {
+            continue;
+        }
+        let Ok(segs) = fs::read_dir(dev.path().join("segments")) else { continue };
+        for seg in segs.filter_map(|e| e.ok()) {
+            if !seg.path().join("events.jsonl").is_file() {
+                continue;
+            }
+            let n = seg.file_name().to_string_lossy().to_string();
+            let Ok(t) = chrono::NaiveDateTime::parse_from_str(n.get(..19).unwrap_or(""), "%Y-%m-%dT%H-%M-%S") else { continue };
+            let local = Utc.from_utc_datetime(&t).with_timezone(&Local);
+            dates.insert(local.format("%Y-%m-%d").to_string());
+            // 跨本地午夜的 10 分钟段，两天都算有数据
+            dates.insert((local + Duration::minutes(10)).format("%Y-%m-%d").to_string());
+        }
+    }
+    dates
+}
+
+/// 手机前台事件里出现过的本地日期
+fn phone_event_dates(ev: &[PhoneEv]) -> HashSet<String> {
+    let mut dates = HashSet::new();
+    for x in ev {
+        if let Some(dt) = Utc.timestamp_opt(x.t as i64, 0).single() {
+            dates.insert(dt.with_timezone(&Local).format("%Y-%m-%d").to_string());
+        }
+    }
+    dates
+}
+
 #[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn list_days() -> Vec<Value> {
     let repo = repo_path();
@@ -1054,6 +1090,9 @@ pub fn list_days() -> Vec<Value> {
             }
         }
     }
+    // 自采事件／手机记录：摘要和日数据包还没出来时（常见于今天）也要进总结页
+    dates.extend(computer_event_dates());
+    dates.extend(phone_event_dates(ev.as_slice()));
     let mut dates: Vec<String> = dates.into_iter().collect();
     dates.sort_by(|a, b| b.cmp(a));
     dates
