@@ -1197,6 +1197,8 @@ function tlRow(x) {
   const s = x.seg;
   // 连续的「不在电脑前」已由 Rust 合成一段：一行灰字，不能展开
   if (s.kind === "idle") return `<div class="tl-row computer idle" ${h}>${t}<span>${esc(s.title)}</span></div>`;
+  // 当前未收口的 10 分钟段：占位提示，不是丢数据
+  if (s.open) return `<div class="tl-row computer open" ${h}>${t}<span><span class="name">${esc(s.title || "进行中")}</span>${s.description ? `<div class="desc">${esc(s.description)}</div>` : ""}</span></div>`;
   const ctx = (s.context || []).filter((y) => !y.includes("/Users/"));
   const more = [
     ctx.length ? `<div><h4>涉及</h4>${md(ctx.map((y) => "- " + y).join("\n"))}</div>` : "",

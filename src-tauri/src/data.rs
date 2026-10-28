@@ -1,9 +1,9 @@
 //! 给网页的取数命令（清单见 COMMANDS.md）。口径和 app/ui/mock/生成样例.py 一致：
 //! 读仓库的 日数据/日数据_*.json、日总结/日总结_*.md，本机 Beayy/summaries/ 的自采摘要，
 //! Beayy/devices/iphone-*/ 的 iPhone 前台事件（手机算法同 脚本/日数据包.py 的 section_phone）。
-//! 读的都是正式数据目录（并跑版自己写影子目录，但页面看正式数据）。
+//! 采集／摘要／时间线段：读 `data_root()`（测试版影子目录与写入一致）；设置／规矩／待办仍在正式根 `default_root()`。
 
-use beayy_core::default_root;
+use beayy_core::{data_root, default_root};
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -127,7 +127,7 @@ fn phone_events() -> std::sync::Arc<Vec<PhoneEv>> {
 
 fn read_phone_events() -> Vec<PhoneEv> {
     let mut out = Vec::new();
-    let devices = default_root().join("devices");
+    let devices = data_root().join("devices");
     let Ok(devs) = fs::read_dir(&devices) else { return out };
     for dev in devs.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with("iphone-")) {
         let Ok(segs) = fs::read_dir(dev.path().join("segments")) else { continue };
@@ -281,7 +281,7 @@ fn phone_sessions(used: &[&(f64, f64, String)], names: &HashMap<String, String>)
 fn self_segments() -> HashMap<String, Vec<Value>> {
     let mut out: HashMap<String, Vec<Value>> = HashMap::new();
     // 项目名按别名表归到规范名，领域按登记表固定（同一个项目前后一致）
-    let sm = beayy_summary::Summarizer::new(default_root());
+    let sm = beayy_summary::Summarizer::new(data_root());
     let (aliases, domains) = (sm.aliases(), sm.domains());
     let canon = |parts: Option<&Value>| -> Value {
         Value::Array(
@@ -309,8 +309,8 @@ fn self_segments() -> HashMap<String, Vec<Value>> {
     let me = beayy_core::local_device();
     let mut files: Vec<(PathBuf, String)> = vec![];
     let list = |dir: PathBuf| -> Vec<PathBuf> { fs::read_dir(dir).map(|r| r.filter_map(|e| e.ok()).map(|e| e.path()).collect()).unwrap_or_default() };
-    files.extend(list(default_root().join("summaries")).into_iter().map(|p| (p, me.clone())));
-    for dev in list(default_root().join("devices")) {
+    files.extend(list(data_root().join("summaries")).into_iter().map(|p| (p, me.clone())));
+    for dev in list(data_root().join("devices")) {
         let d = dev.file_name().unwrap_or_default().to_string_lossy().to_string();
         if d != me && beayy_summary::is_computer(&d) {
             files.extend(list(dev.join("summaries")).into_iter().map(|p| (p, d.clone())));
@@ -395,7 +395,7 @@ pub fn live_computer(date: NaiveDate) -> Option<Value> {
         }
     }
     // 过去的日子不会再变：算一次存盘（Beayy/daily/stats_YYYY-MM-DD.json），之后直接读
-    let cache = default_root().join("daily").join(format!("stats_{date}.json"));
+    let cache = data_root().join("daily").join(format!("stats_{date}.json"));
     let past = date < Local::now().date_naive();
     let v = match fs::read_to_string(&cache).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
         Some(v) if past => Some(v).filter(|v| !v.is_null()),
@@ -414,7 +414,7 @@ pub fn live_computer(date: NaiveDate) -> Option<Value> {
 
 fn compute_live(date: NaiveDate) -> Option<Value> {
     let (s, e) = day_bounds(date);
-    let act = beayy_summary::Summarizer::new(default_root()).activity(s.with_timezone(&Utc), e.with_timezone(&Utc));
+    let act = beayy_summary::Summarizer::new(data_root()).activity(s.with_timezone(&Utc), e.with_timezone(&Utc));
     if act.spans.is_empty() && act.windows.is_empty() {
         return None;
     }
@@ -463,7 +463,7 @@ const REC_GAP: f64 = 300.0;
 fn device_events(prefix: &str, types: &[&str], from: DateTime<Utc>, to: DateTime<Utc>) -> Vec<Value> {
     let mut out = vec![];
     let (lo, hi) = (beayy_core::segment_key(from), beayy_core::segment_key(to));
-    let Ok(devs) = fs::read_dir(default_root().join("devices")) else { return out };
+    let Ok(devs) = fs::read_dir(data_root().join("devices")) else { return out };
     for dev in devs.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with(prefix)) {
         let Ok(segs) = fs::read_dir(dev.path().join("segments")) else { continue };
         for seg in segs.filter_map(|e| e.ok()) {
@@ -488,7 +488,7 @@ fn device_events(prefix: &str, types: &[&str], from: DateTime<Utc>, to: DateTime
 }
 
 fn has_device(prefix: &str) -> bool {
-    fs::read_dir(default_root().join("devices")).map(|r| r.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with(prefix))).unwrap_or(false)
+    fs::read_dir(data_root().join("devices")).map(|r| r.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with(prefix))).unwrap_or(false)
 }
 
 fn ts_of(v: &Value) -> Option<DateTime<Utc>> {
@@ -1020,7 +1020,7 @@ fn summary_of(repo: &Option<PathBuf>, date: &str) -> Option<String> {
     let name = format!("日总结_{}.md", date.replace('-', ""));
     repo.as_ref()
         .and_then(|r| fs::read_to_string(r.join("日总结").join(&name)).ok())
-        .or_else(|| fs::read_to_string(default_root().join("daily").join(&name)).ok())
+        .or_else(|| fs::read_to_string(data_root().join("daily").join(&name)).ok())
 }
 
 fn computer_hours(c: &Value) -> Value {
@@ -1040,7 +1040,7 @@ fn computer_hours(c: &Value) -> Value {
 /// 电脑自采分段目录名 → 本地日期（还没写成 10 分钟摘要时，总结页也要能看到这些天）
 fn computer_event_dates() -> HashSet<String> {
     let mut dates = HashSet::new();
-    let Ok(devs) = fs::read_dir(default_root().join("devices")) else { return dates };
+    let Ok(devs) = fs::read_dir(data_root().join("devices")) else { return dates };
     for dev in devs.filter_map(|e| e.ok()) {
         let name = dev.file_name().to_string_lossy().to_string();
         if !beayy_summary::is_computer(&name) {
@@ -1122,6 +1122,45 @@ pub fn list_days() -> Vec<Value> {
         .collect()
 }
 
+
+/// 当前整 10 分 UTC 段若已有事件、还没摘要，返回一条「进行中」占位（不进 work 统计也可，title 特殊）
+fn open_segment_placeholder(taken: &HashSet<String>) -> Option<Value> {
+    let now = Utc::now();
+    let key = beayy_core::segment_key(now); // 如 2026-10-28T14-50-00Z
+    let start = chrono::NaiveDateTime::parse_from_str(&key[..19], "%Y-%m-%dT%H-%M-%S").ok()?;
+    let start = Utc.from_utc_datetime(&start);
+    let start_iso = utc_iso(start);
+    if taken.contains(&start_iso) {
+        return None;
+    }
+    let path = data_root()
+        .join("devices")
+        .join(beayy_core::local_device())
+        .join("segments")
+        .join(&key)
+        .join("events.jsonl");
+    let meta = fs::metadata(&path).ok()?;
+    if meta.len() == 0 {
+        return None;
+    }
+    Some(json!({
+        "active_sec": Value::Null,
+        "parts": [],
+        "start": start_iso,
+        "end": utc_iso(now),
+        "kind": "10min",
+        "source": "beayy",
+        "device": beayy_core::local_device(),
+        "title": "进行中",
+        "apps": [],
+        "description": "这一段还没收口，整 10 分钟过后会生成摘要",
+        "memory": "",
+        "context": [],
+        "recording": "",
+        "open": true,
+    }))
+}
+
 #[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn get_day(date: String) -> Value {
     let repo = repo_path();
@@ -1137,6 +1176,12 @@ pub fn get_day(date: String) -> Value {
     let mut segs: Vec<Value> = pack.as_ref().map(|p| codex_segments(p, nd)).unwrap_or_default();
     segs.retain(|s| !taken.contains(s["start"].as_str().unwrap_or("")));
     segs.extend(own);
+    // 今天当前未收口的 10 分钟段：有采集就挂一条「进行中」，避免用户以为近几分钟丢了
+    if date == Local::now().format("%Y-%m-%d").to_string() {
+        if let Some(cur) = open_segment_placeholder(&taken) {
+            segs.push(cur);
+        }
+    }
     segs.sort_by(|a, b| a["start"].as_str().cmp(&b["start"].as_str()));
     let work = work_of(&segs);
     let hours = rollups_of(nd);
@@ -1206,9 +1251,9 @@ fn work_of(segs: &[Value]) -> Value {
 /// 这一天的小时摘要（Beayy/summaries-1h/），项目名按别名表归并
 fn rollups_of(date: NaiveDate) -> Vec<Value> {
     let (s, e) = day_bounds(date);
-    let al = beayy_summary::Summarizer::new(default_root()).aliases();
+    let al = beayy_summary::Summarizer::new(data_root()).aliases();
     let mut out = vec![];
-    for f in fs::read_dir(default_root().join("summaries-1h")).map(|r| r.filter_map(|x| x.ok()).map(|x| x.path()).collect::<Vec<_>>()).unwrap_or_default() {
+    for f in fs::read_dir(data_root().join("summaries-1h")).map(|r| r.filter_map(|x| x.ok()).map(|x| x.path()).collect::<Vec<_>>()).unwrap_or_default() {
         let n = f.file_name().unwrap().to_string_lossy().to_string();
         let Ok(t) = chrono::NaiveDateTime::parse_from_str(n.get(..19).unwrap_or(""), "%Y-%m-%dT%H-%M-%S") else { continue };
         let t = t.and_utc();
@@ -1387,7 +1432,7 @@ pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, 
     let first_seg = from - Duration::minutes(10);
     let mut removed = 0;
     let mut touched: Vec<String> = vec![];
-    let Ok(devs) = fs::read_dir(default_root().join("devices")) else { return Ok(0) };
+    let Ok(devs) = fs::read_dir(data_root().join("devices")) else { return Ok(0) };
     let me = beayy_core::local_device();
     for dev in devs.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy() == me.as_str()) {
         let Ok(segs) = fs::read_dir(dev.path().join("segments")) else { continue };
@@ -1420,7 +1465,7 @@ pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, 
             }
         }
     }
-    if let Ok(files) = fs::read_dir(default_root().join("summaries")) {
+    if let Ok(files) = fs::read_dir(data_root().join("summaries")) {
         for f in files.filter_map(|e| e.ok()) {
             let n = f.file_name().to_string_lossy().to_string();
             if touched.iter().any(|t| n.starts_with(t.trim_end_matches('Z'))) {
@@ -1447,7 +1492,7 @@ pub fn recent_events(device: String, before: Option<String>, limit: Option<usize
     let want = |t: &str| types.is_empty() || types.iter().any(|x| if x.ends_with('.') { t.starts_with(x.as_str()) } else { t == x });
     let before_t = before.as_deref().and_then(|b| DateTime::parse_from_rfc3339(b).ok()).map(|t| t.with_timezone(&Utc));
     let top = before_t.map(beayy_core::segment_key);
-    let Ok(rd) = fs::read_dir(default_root().join("devices").join(&device).join("segments")) else {
+    let Ok(rd) = fs::read_dir(data_root().join("devices").join(&device).join("segments")) else {
         return Ok(json!({ "events": [], "more": false }));
     };
     let mut segs: Vec<(String, PathBuf)> = rd
@@ -1513,7 +1558,7 @@ fn read_devices() -> Vec<Value> {
     let me = beayy_core::local_device();
     let synced = beayy_sync::remote_set(&beayy_core::data_root());
     let mut out = vec![];
-    let Ok(devs) = fs::read_dir(default_root().join("devices")) else { return out };
+    let Ok(devs) = fs::read_dir(data_root().join("devices")) else { return out };
     let mut devs: Vec<_> = devs.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).collect();
     devs.sort_by_key(|e| e.file_name());
     for dev in devs {
@@ -1615,7 +1660,7 @@ pub async fn save_profile(name: String, avatar: Option<String>) -> Result<(), St
 /// 所有出现过的项目：规范名、领域、累计时长、最近一次、被合并进来的别名
 #[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn list_projects() -> Vec<Value> {
-    let sm = beayy_summary::Summarizer::new(default_root());
+    let sm = beayy_summary::Summarizer::new(data_root());
     let aliases = sm.aliases();
     let mut agg: BTreeMap<String, (String, f64, String)> = BTreeMap::new();
     for segs in self_segments().into_values() {
@@ -1648,12 +1693,12 @@ pub fn list_projects() -> Vec<Value> {
 
 #[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn merge_project(from: String, into: String) -> Result<(), String> {
-    beayy_summary::Summarizer::new(default_root()).merge_project(&from, &into)
+    beayy_summary::Summarizer::new(data_root()).merge_project(&from, &into)
 }
 
 #[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn set_project_domain(project: String, domain: String) -> Result<(), String> {
-    beayy_summary::Summarizer::new(default_root()).set_project_domain(&project, &domain)
+    beayy_summary::Summarizer::new(data_root()).set_project_domain(&project, &domain)
 }
 
 /// 首次引导里「测试一下」：用现在的网关、模型、密钥问一句

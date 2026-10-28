@@ -1,8 +1,8 @@
 //! 10 分钟摘要调度：每个整 10 分过后 1 分钟跑一次 beayy-summary。
-//! 已写过的分段自动跳过，重复跑没有副作用；另用锁文件防止并跑版和正式版同时跑。日志追加到 Beayy/logs/summarizer.log。
-//! 读写的都是正式数据目录（测试版 --shadow 也一样）。
+//! 已写过的分段自动跳过，重复跑没有副作用；另用锁文件防止并跑版和正式版同时跑。
+//! 读写跟采集同一数据根：`data_root()`（正式版＝Beayy/；测试版 BEAYY_SHADOW=1＝Beayy/shadow/）。
 
-use beayy_core::{default_root, fields, EventLog};
+use beayy_core::{data_root, default_root, fields, shadow_mode, EventLog};
 use chrono::{Timelike, Utc};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -11,7 +11,22 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 fn lock_path() -> PathBuf {
-    default_root().join("summarizer.lock")
+    data_root().join("summarizer.lock")
+}
+
+/// 测试版影子目录里没有 settings／别名时，从正式目录拷一份（密钥仍在钥匙串）
+fn ensure_shadow_settings(root: &std::path::Path) {
+    if !shadow_mode() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(root);
+    for name in ["settings.json", "project_aliases.json"] {
+        let src = default_root().join(name);
+        let dst = root.join(name);
+        if src.is_file() && !dst.is_file() {
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
 }
 
 /// 锁文件里记的进程还在不在（进程被杀时锁文件会留下，10-16 因此停过 20 分钟）
@@ -41,11 +56,13 @@ pub fn run_once(log: &EventLog) {
     if !try_lock() {
         return;
     }
-    let logs = default_root().join("logs");
+    let root = data_root();
+    ensure_shadow_settings(&root);
+    let logs = root.join("logs");
     let _ = fs::create_dir_all(&logs);
     let mut out = OpenOptions::new().create(true).append(true).open(logs.join("summarizer.log")).ok();
     let start = Instant::now();
-    let sm = beayy_summary::Summarizer::new(default_root());
+    let sm = beayy_summary::Summarizer::new(root);
     let mut logline = |line: String| {
         if let Some(f) = out.as_mut() {
             let _ = writeln!(f, "{line}");
