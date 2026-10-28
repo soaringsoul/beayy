@@ -81,16 +81,28 @@ fn account_file(root: &Path) -> PathBuf {
     root.join("sync").join("account")
 }
 
+/// 钥匙串里的同步账号码：读一次要起 security 子进程，进程内缓存 60 秒（存／忘记账号时作废）
+static KEYCHAIN_CODE: std::sync::Mutex<Option<(std::time::Instant, Option<String>)>> = std::sync::Mutex::new(None);
+
+fn keychain_code() -> Option<String> {
+    if let Some((t, v)) = KEYCHAIN_CODE.lock().unwrap().as_ref() {
+        if t.elapsed().as_secs() < 60 {
+            return v.clone();
+        }
+    }
+    let v = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", "com.fengli.beayy", "-a", "sync", "-w"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    *KEYCHAIN_CODE.lock().unwrap() = Some((std::time::Instant::now(), v.clone()));
+    v
+}
+
 pub fn load(root: &Path) -> Option<Account> {
     let code = if use_keychain() {
-        let o = std::process::Command::new("/usr/bin/security")
-            .args(["find-generic-password", "-s", "com.fengli.beayy", "-a", "sync", "-w"])
-            .output()
-            .ok()?;
-        if !o.status.success() {
-            return None;
-        }
-        String::from_utf8_lossy(&o.stdout).trim().to_string()
+        keychain_code()?
     } else {
         fs::read_to_string(account_file(root)).ok()?
     };
@@ -98,6 +110,7 @@ pub fn load(root: &Path) -> Option<Account> {
 }
 
 fn save(root: &Path, a: &Account) -> Result<(), String> {
+    *KEYCHAIN_CODE.lock().unwrap() = None;
     if use_keychain() {
         let ok = std::process::Command::new("/usr/bin/security")
             .args(["add-generic-password", "-U", "-s", "com.fengli.beayy", "-a", "sync", "-w", &a.code()])
@@ -113,6 +126,7 @@ fn save(root: &Path, a: &Account) -> Result<(), String> {
 
 /// 本机退出同步：忘掉账号（服务器上的数据不动）。同步进度留着，同一个账号再登录不用从头重传
 pub fn forget(root: &Path) {
+    *KEYCHAIN_CODE.lock().unwrap() = None;
     if use_keychain() {
         let _ = std::process::Command::new("/usr/bin/security").args(["delete-generic-password", "-s", "com.fengli.beayy", "-a", "sync"]).output();
     }

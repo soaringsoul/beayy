@@ -35,8 +35,22 @@ async function loadMock(name) {
   return JSON.parse(JSON.stringify(MOCK[name]));
 }
 
+// 耗时记录（只在测试版写 snapshots/perf.txt）：命令超过 80 毫秒、切页超过 300 毫秒就记一行，慢了好查
+const PERF = { lines: [], timer: null };
+function perfNote(line) {
+  if (!TAURI) return;
+  PERF.lines.push(`${new Date().toTimeString().slice(0, 8)} ${line}`);
+  if (PERF.lines.length > 200) PERF.lines.shift();
+  clearTimeout(PERF.timer);
+  PERF.timer = setTimeout(() => { try { TAURI.invoke("dev_report", { name: "perf", text: PERF.lines.join("\n") }).catch(() => {}); } catch (e) {} }, 500);
+}
+
 async function call(cmd, args = {}) {
-  if (TAURI) return TAURI.invoke(cmd, args);
+  if (TAURI) {
+    const t0 = performance.now();
+    try { return await TAURI.invoke(cmd, args); }
+    finally { const ms = performance.now() - t0; if (ms > 80 && cmd !== "dev_report") perfNote(`call ${cmd} ${Math.round(ms)}ms`); }
+  }
   // 浏览器里：写操作只改内存，读操作读样例
   switch (cmd) {
     case "save_rules": mockState.rules = args.rules; return null;
@@ -2700,6 +2714,11 @@ async function renderOnboarding() {
 // ---------- 路由 ----------
 
 async function route() {
+  const t0 = performance.now();
+  try { await route1(); } finally { const ms = performance.now() - t0; if (ms > 300 || PERF.cycle) perfNote(`route ${location.hash || "#/today"} ${Math.round(ms)}ms`); }
+}
+
+async function route1() {
   const [page = "today", arg, arg2] = location.hash.replace(/^#\/?/, "").split("/");
   // 换页就关掉弹层；刚拿到恢复码那个必须点「我已存好」才关
   if (DLG && DLG.closable) closeDialog();
@@ -2761,7 +2780,17 @@ setInterval(async () => {
   document.getElementById("main").scrollTop = y;
 }, 60000);
 route();
-
+// 自测：BEAYY_PERF=1 启动时依次切各页三轮并记耗时（见 perf.txt）
+setTimeout(async () => {
+  if (!TAURI) return;
+  let st; try { st = await TAURI.invoke("get_status"); } catch (e) { return; }
+  if (!st || !st.perf) return;
+  PERF.cycle = true;
+  for (let r = 0; r < 3; r++) for (const h of ["#/summary", "#/rules", "#/todos", "#/devices", "#/today"]) {
+    location.hash = h; await new Promise((ok) => setTimeout(ok, 2500));
+  }
+  perfNote("自测结束");
+}, 6000);
 
 /* beayy-window-drag-js */
 (function () {

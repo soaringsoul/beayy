@@ -54,7 +54,7 @@ fn key() -> Result<String, String> {
 }
 
 /// 存高德 Key：macOS 进钥匙串，Windows 写数据目录；不回传网页。空字符串＝删掉
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn set_amap_key(key: String) -> Result<(), String> {
     beayy_core::secret_set(SECRET, key.trim())
 }
@@ -77,7 +77,7 @@ pub async fn amap_js_config() -> Value {
 }
 
 /// 存地图用的 Key 和安全密钥（空字符串＝删掉）
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn set_amap_js(key: String, code: String) -> Result<(), String> {
     beayy_core::secret_set("amap_js_key", key.trim())?;
     beayy_core::secret_set("amap_js_code", code.trim())
@@ -178,7 +178,7 @@ fn pois(v: &Value) -> Vec<Value> {
 const PLACE_TYPES: &str = "010000|020000|030000|040000|050000|060000|070000|080000|090000|100000|110000|130000|140000|160000|170000";
 
 /// 附近的地点，按距离（「这次在哪」的候选列表）
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn amap_around(lat: f64, lon: f64, radius: Option<u32>) -> Result<Vec<Value>, String> {
     let r = radius.unwrap_or(150).clamp(10, 3000);
     let v = get("place/around", &[("location", location(lat, lon)), ("radius", r.to_string()), ("sortrule", "distance".into()), ("types", PLACE_TYPES.into()), ("offset", "25".into())])?;
@@ -186,7 +186,7 @@ pub fn amap_around(lat: f64, lon: f64, radius: Option<u32>) -> Result<Vec<Value>
 }
 
 /// 按名字搜地点：有位置就按离这里多远（50 公里内），没有就全国按相关度
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn amap_search(text: String, lat: Option<f64>, lon: Option<f64>) -> Result<Vec<Value>, String> {
     let text = text.trim().to_string();
     if text.is_empty() {
@@ -200,7 +200,7 @@ pub fn amap_search(text: String, lat: Option<f64>, lon: Option<f64>) -> Result<V
 }
 
 /// 今天页的地图：高德静态地图（同一个 Web 服务 Key），停留点按先后编号（1–9、A–Z，标注用设计系统的地点色 place-alt，编号是黑字；selected 那一段用强调色），按先后连线。返回 data:image/png
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn amap_map(points: Vec<[f64; 2]>, width: Option<u32>, height: Option<u32>, selected: Option<usize>, often: Option<Vec<bool>>) -> Result<String, String> {
     if points.is_empty() {
         return Err("这天没有停留点".into());

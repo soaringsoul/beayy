@@ -64,6 +64,26 @@ pub fn shadow_mode() -> bool {
 
 /// 存在系统钥匙串里的一项（服务 com.fengli.beayy，账号 `account`）；没有钥匙串的系统（Windows）存在数据目录 secrets/<账号>，未加密
 pub fn secret_get(account: &str) -> Option<String> {
+    // 每次读钥匙串都要起一个 security 子进程（几十毫秒），设置页／状态页一次要读好几项：进程内缓存 60 秒，写入时作废
+    #[cfg(target_os = "macos")]
+    {
+        if let Some((t, v)) = SECRET_CACHE.lock().unwrap().get(account) {
+            if t.elapsed().as_secs() < 60 {
+                return v.clone();
+            }
+        }
+        let v = secret_read(account);
+        SECRET_CACHE.lock().unwrap().insert(account.to_string(), (std::time::Instant::now(), v.clone()));
+        return v;
+    }
+    #[cfg(not(target_os = "macos"))]
+    secret_read(account)
+}
+
+#[cfg(target_os = "macos")]
+static SECRET_CACHE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Option<String>)>>> = std::sync::LazyLock::new(Default::default);
+
+fn secret_read(account: &str) -> Option<String> {
     #[cfg(target_os = "macos")]
     let v = std::process::Command::new("/usr/bin/security")
         .args(["find-generic-password", "-s", "com.fengli.beayy", "-a", account, "-w"])
@@ -80,6 +100,7 @@ pub fn secret_get(account: &str) -> Option<String> {
 pub fn secret_set(account: &str, value: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        SECRET_CACHE.lock().unwrap().remove(account);
         let args: Vec<&str> = if value.is_empty() {
             vec!["delete-generic-password", "-s", "com.fengli.beayy", "-a", account]
         } else {

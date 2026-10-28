@@ -1130,6 +1130,28 @@ pub fn api_key_source() -> Option<&'static str> {
     api_key_with_source().ok().map(|(_, s)| s)
 }
 
+/// 钥匙串里的模型密钥：读一次要起 security 子进程，进程内缓存 60 秒（存密钥时作废）
+#[cfg(target_os = "macos")]
+static KEY_CACHE: std::sync::Mutex<Option<(std::time::Instant, Option<String>)>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "macos")]
+fn keychain_api_key() -> Option<String> {
+    if let Some((t, v)) = KEY_CACHE.lock().unwrap().as_ref() {
+        if t.elapsed().as_secs() < 60 {
+            return v.clone();
+        }
+    }
+    let v = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", "com.fengli.beayy", "-a", "api_key", "-w"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|k| !k.is_empty());
+    *KEY_CACHE.lock().unwrap() = Some((std::time::Instant::now(), v.clone()));
+    v
+}
+
 fn api_key_with_source() -> Result<(String, &'static str), String> {
     for var in ["BEAYY_API_KEY", "LIFE_RECORD_API_KEY"] {
         if let Ok(k) = std::env::var(var) {
@@ -1139,14 +1161,8 @@ fn api_key_with_source() -> Result<(String, &'static str), String> {
         }
     }
     #[cfg(target_os = "macos")]
-    if let Ok(o) = std::process::Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", "com.fengli.beayy", "-a", "api_key", "-w"])
-        .output()
-    {
-        let k = String::from_utf8_lossy(&o.stdout).trim().to_string();
-        if o.status.success() && !k.is_empty() {
-            return Ok((k, "keychain"));
-        }
+    if let Some(k) = keychain_api_key() {
+        return Ok((k, "keychain"));
     }
     #[cfg(not(target_os = "macos"))]
     if let Ok(k) = fs::read_to_string(key_file()) {
@@ -1168,6 +1184,7 @@ fn key_file() -> PathBuf {
 pub fn store_api_key(key: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        *KEY_CACHE.lock().unwrap() = None;
         let ok = std::process::Command::new("/usr/bin/security")
             .args(["add-generic-password", "-U", "-s", "com.fengli.beayy", "-a", "api_key", "-w", key])
             .status()

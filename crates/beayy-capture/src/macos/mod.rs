@@ -270,15 +270,26 @@ fn main_app_service() -> Retained<AnyObject> {
 }
 
 /// 开机自动启动开着没有（SMAppServiceStatusEnabled＝1）
+/// 问系统一次要 100 多毫秒（界面切页、托盘刷新都会问）：缓存 30 秒，自己改开关时作废
+static LOGIN_CACHE: std::sync::Mutex<Option<(std::time::Instant, bool)>> = std::sync::Mutex::new(None);
+
 pub fn login_item_enabled() -> bool {
-    objc2::rc::autoreleasepool(|_| {
+    if let Some((t, v)) = *LOGIN_CACHE.lock().unwrap() {
+        if t.elapsed().as_secs() < 30 {
+            return v;
+        }
+    }
+    let v = objc2::rc::autoreleasepool(|_| {
         let status: isize = unsafe { msg_send![&*main_app_service(), status] };
         status == 1
-    })
+    });
+    *LOGIN_CACHE.lock().unwrap() = Some((std::time::Instant::now(), v));
+    v
 }
 
 /// 打开或关掉开机自动启动；失败返回系统给的错误
 pub fn set_login_item(on: bool) -> Result<(), String> {
+    *LOGIN_CACHE.lock().unwrap() = None;
     objc2::rc::autoreleasepool(|_| {
         let svc = main_app_service();
         let mut err: *mut AnyObject = std::ptr::null_mut();

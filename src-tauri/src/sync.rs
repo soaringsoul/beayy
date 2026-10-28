@@ -71,7 +71,7 @@ fn pull_profile() {
     }
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn sync_status() -> Value {
     let mut v = beayy_sync::status(&data_root());
     v["running"] = json!(RUNNING.load(Ordering::SeqCst));
@@ -163,7 +163,7 @@ pub async fn account_logout() {
     beayy_sync::logout(&data_root());
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn account_recovery_code() -> Option<String> {
     beayy_sync::recovery_code(&data_root())
 }

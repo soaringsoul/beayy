@@ -68,10 +68,24 @@ fn events_today(state: &AppState) -> u64 {
     base + state.log.count().saturating_sub(at)
 }
 
-#[tauri::command]
-fn get_status(state: tauri::State<'_, Arc<AppState>>) -> Value {
-    json!({
-        "permissions": beayy_capture::permissions(),
+/// 权限查询要查 TCC／起 codesign 子进程，界面切页、开机自检会连着调：缓存 1.5 秒（引导页每 2 秒轮询，授权后最多晚一次）
+fn permissions_cached() -> beayy_capture::PermissionStatus {
+    static C: std::sync::Mutex<Option<(std::time::Instant, beayy_capture::PermissionStatus)>> = std::sync::Mutex::new(None);
+    if let Some((t, p)) = C.lock().unwrap().as_ref() {
+        if t.elapsed() < Duration::from_millis(1500) {
+            return p.clone();
+        }
+    }
+    let p = beayy_capture::permissions();
+    *C.lock().unwrap() = Some((std::time::Instant::now(), p.clone()));
+    p
+}
+
+// 不在主线程跑：锁被后台同步占着、读文件慢的时候不会把整个窗口卡住
+#[tauri::command(async)]
+fn get_status(state: tauri::State<'_, Arc<AppState>>) -> Result<Value, String> {
+    Ok(json!({
+        "permissions": permissions_cached(),
         "capturing": capturing(),
         "paused": state.paused.load(Ordering::Relaxed),
         "paused_until": state.paused_until.lock().unwrap().map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
@@ -83,7 +97,8 @@ fn get_status(state: tauri::State<'_, Arc<AppState>>) -> Value {
         "device": state.log.device,
         "version": env!("CARGO_PKG_VERSION"),
         "shadow": shadow_mode(),
-    })
+        "perf": std::env::var("BEAYY_PERF").is_ok(),
+    }))
 }
 
 fn capturing() -> bool {
@@ -340,6 +355,8 @@ fn main() {
             Some("list_devices") => json!(data::list_devices()),
             Some("list_projects") => json!(data::list_projects()),
             Some("get_profile") => data::get_profile(),
+            Some("sync_status") => sync::sync_status(),
+            Some("permissions") => json!(beayy_capture::permissions()),
             Some("recent_events") => data::recent_events(args.get(3).cloned().unwrap_or_default(), None, Some(5), None).unwrap_or_else(|e| json!({ "error": e })),
             Some("place_stats") => data::place_stats(None),
             Some("cloud_round") => match beayy_remote::cloud::round(&mut Relay::default(), &data_root(), Duration::from_secs(600)) {

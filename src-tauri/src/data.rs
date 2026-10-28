@@ -647,7 +647,7 @@ fn labels_path() -> PathBuf {
 
 /// 给一个地方起名（家、公司……），存进 Beayy/places/labels.json；半径内已有的就改它，label 为空＝删掉这个名字。
 /// 第一次写时先把外部数据目录 raw/places/labels.json 里已有的抄过来，免得新文件把它们盖住
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn set_place_label(lat: f64, lon: f64, label: String, kind: Option<String>) -> Result<(), String> {
     let mut all = place_labels();
     let label = label.trim().to_string();
@@ -691,7 +691,7 @@ fn write_json(p: &PathBuf, v: &Value) -> Result<(), String> {
 
 /// 确认一段停留是哪家店（「这次在哪」里点的，或自己输入的店名）；店的坐标用高德给的，自己输入的用停留点的。
 /// 同一处同名的店只记一条
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn set_place_pick(id: String, shop: String, kind: Option<String>, lat: f64, lon: f64) -> Result<(), String> {
     let shop = shop.trim().to_string();
     if shop.is_empty() {
@@ -735,7 +735,7 @@ fn picks_of(v: &Value) -> Vec<Value> {
 }
 
 /// 撤销对一段停留的确认（名字退回只写区域）
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn clear_place_pick(id: String) -> Result<(), String> {
     let mut p = place_picks();
     if let Some(m) = p["stays"].as_object_mut() {
@@ -746,7 +746,7 @@ pub fn clear_place_pick(id: String) -> Result<(), String> {
 
 /// 「地点 · 常去」：最近 days 天（默认 30）的停留按地方合计。起过名的按名字合（没去过的也列，次数 0），
 /// 没起名的按区域合（同一个区县 · 区域），只列去过 5 次以上的。只用缓存，不问高德（没缓存过分级的用手机传来的地名）
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn place_stats(days: Option<i64>) -> Value {
     let days = days.unwrap_or(30).clamp(1, 120);
     let today = Local::now().date_naive();
@@ -793,13 +793,13 @@ pub fn place_stats(days: Option<i64>) -> Value {
 }
 
 /// 常去的地方（自己起过名的）：[{label, type, lat, lon, r, address?}]，设置页列出来改
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn list_place_labels() -> Vec<Value> {
     place_labels()
 }
 
 /// 改常去的地方里的一项：名字、种类、范围（米）、地址；名字空＝删掉。第一次写同 set_place_label（先把外部数据目录的抄过来）
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn edit_place_label(index: usize, label: String, kind: String, r: f64, address: Option<String>) -> Result<(), String> {
     let mut all = place_labels();
     if index >= all.len() {
@@ -1096,7 +1096,7 @@ fn phone_event_dates(ev: &[PhoneEv]) -> HashSet<String> {
     dates
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn list_days() -> Vec<Value> {
     let repo = repo_path();
     let names = app_names();
@@ -1184,7 +1184,7 @@ fn open_segment_placeholder(taken: &HashSet<String>) -> Option<Value> {
     }))
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn get_day(date: String) -> Value {
     let repo = repo_path();
     let Ok(nd) = NaiveDate::parse_from_str(&date, "%Y-%m-%d") else { return Value::Null };
@@ -1332,12 +1332,12 @@ fn rules_path() -> PathBuf {
     default_root().join("rules.json")
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn get_rules() -> Value {
     fs::read_to_string(rules_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!([]))
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn save_rules(rules: Value) -> Result<(), String> {
     fs::create_dir_all(default_root()).map_err(|e| e.to_string())?;
     fs::write(rules_path(), serde_json::to_string_pretty(&rules).unwrap()).map_err(|e| e.to_string())
@@ -1357,29 +1357,29 @@ fn read_json_array(path: &PathBuf) -> Value {
     fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!([]))
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn get_todos() -> Value {
     read_json_array(&todos_path())
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn save_todos(todos: Value) -> Result<(), String> {
     write_json(&todos_path(), &todos)
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn get_memos() -> Value {
     read_json_array(&memos_path())
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn save_memos(memos: Value) -> Result<(), String> {
     write_json(&memos_path(), &memos)
 }
 
 
 /// settings.json 的键沿用 Python 摘要脚本的叫法（summary_model、daily_model、blacklist），对网页换成 COMMANDS.md 的叫法
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn get_settings() -> Value {
     let s = read_settings_raw();
     let get = |k: &str, d: &str| s.get(k).and_then(|v| v.as_str()).filter(|v| !v.is_empty()).unwrap_or(d).to_string();
@@ -1410,7 +1410,7 @@ pub fn get_settings() -> Value {
     })
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn save_settings(settings: Value) -> Result<(), String> {
     let mut s = read_settings_raw();
     let map = [("gateway", "gateway"), ("model_segment", "summary_model"), ("model_daily", "daily_model"), ("repo_path", "repo_path"), ("blocklist", "blacklist"), ("onboarded", "onboarded"), ("relay_server", "relay_server"), ("sync_server", "sync_server"), ("transcribe_server", "transcribe_server"), ("speaker_name", "speaker_name"), ("model_mode", "model_mode"), ("map_mode", "map_mode")];
@@ -1430,13 +1430,13 @@ pub fn save_settings(settings: Value) -> Result<(), String> {
 }
 
 /// 存密钥：macOS 进钥匙串，Windows 写数据目录里的文件（见 beayy_summary::store_api_key）；不回传网页
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn set_api_key(key: String) -> Result<(), String> {
     beayy_summary::store_api_key(key.trim())
 }
 
 /// 存录音服务器（手表对话、iPhone 停留点）的口令：macOS 进钥匙串，Windows 写数据目录；不回传网页。空字符串＝删掉
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn set_relay_token(token: String) -> Result<(), String> {
     beayy_core::secret_set(beayy_remote::SECRET, token.trim())
 }
@@ -1445,7 +1445,7 @@ pub fn set_relay_token(token: String) -> Result<(), String> {
 
 /// 删掉本机电脑事件里某时刻之后的记录，连同这些分段的 10 分钟摘要（摘要下一轮按剩下的事件重写）。
 /// 只动本机这台电脑的事件（同步来的别的设备不动）；iPhone 记录、已经归档进仓库 raw/ 的不动。返回删掉的条数
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, String> {
     let from: DateTime<Utc> = if today == Some(true) {
         day_bounds(Local::now().date_naive()).0.with_timezone(&Utc)
@@ -1505,7 +1505,7 @@ pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, 
 /// 或往回翻了 48 个分段（8 小时）就停，不全量扫。before＝只要这个时刻以前的（「加载更早」接着读）；
 /// types＝只要这些种类，以「.」结尾的按前缀算（keyboard. 包含 keyboard.text_input、keyboard.submit……）。
 /// 打的字、界面文字原样返回（采集时密码框已经打码），只给本机界面看，不进网站
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn recent_events(device: String, before: Option<String>, limit: Option<usize>, types: Option<Vec<String>>) -> Result<Value, String> {
     if device.is_empty() || !device.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("设备编号不对".into());
@@ -1553,7 +1553,7 @@ pub fn recent_events(device: String, before: Option<String>, limit: Option<usize
 }
 
 /// 数据目录里的每台设备（devices/<设备>/）：种类、是不是本机、记录从哪天开始、最近一条、条数、占用空间。缓存 60 秒
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn list_devices() -> Vec<Value> {
     let mut g = DEV_CACHE.lock().unwrap();
     if let Some((t, v)) = g.as_ref() {
@@ -1569,7 +1569,7 @@ pub fn list_devices() -> Vec<Value> {
 static DEV_CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<Value>)>> = std::sync::Mutex::new(None);
 
 /// 给设备改名（空＝改回默认名），会同步到别的设备
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn rename_device(id: String, name: String) -> Result<(), String> {
     beayy_sync::rename_device(&beayy_core::data_root(), &id, &name)?;
     *DEV_CACHE.lock().unwrap() = None;
@@ -1637,7 +1637,7 @@ fn read_devices() -> Vec<Value> {
 // ---------- 头像和名称 ----------
 
 /// 本机存的显示名称和头像（settings.json 的 profile_*）；没设名称时用账号邮箱 @ 前面那段，再没有就「我」
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn get_profile() -> Value {
     let s = read_settings_raw();
     let email = beayy_sync::load(&beayy_core::data_root()).and_then(|a| a.email);
@@ -1681,7 +1681,7 @@ pub async fn save_profile(name: String, avatar: Option<String>) -> Result<(), St
 // ---------- 项目（领域 · 项目） ----------
 
 /// 所有出现过的项目：规范名、领域、累计时长、最近一次、被合并进来的别名
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn list_projects() -> Vec<Value> {
     let sm = beayy_summary::Summarizer::new(data_root());
     let aliases = sm.aliases();
@@ -1714,12 +1714,12 @@ pub fn list_projects() -> Vec<Value> {
     out
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn merge_project(from: String, into: String) -> Result<(), String> {
     beayy_summary::Summarizer::new(data_root()).merge_project(&from, &into)
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(beayy_mobile), tauri::command(async))]
 pub fn set_project_domain(project: String, domain: String) -> Result<(), String> {
     beayy_summary::Summarizer::new(data_root()).set_project_domain(&project, &domain)
 }
