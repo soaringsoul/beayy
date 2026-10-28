@@ -78,12 +78,12 @@ dev_pids() {
     case "$cmd" in
       */Beayy-rs.app/Contents/MacOS/beayy*)
         local seen=0 x
-        for x in "${out[@]:-}"; do [[ "$x" == "$pid" ]] && seen=1 && break; done
+        for x in ${out[@]+"${out[@]}"}; do [[ "$x" == "$pid" ]] && seen=1 && break; done
         [[ $seen -eq 0 ]] && out+=("$pid")
         ;;
     esac
   done < <(pgrep -f '/Beayy-rs\.app/Contents/MacOS/beayy' 2>/dev/null || true)
-  printf '%s\n' "${out[@]:-}" | awk 'NF' | sort -u
+  printf '%s\n' ${out[@]+"${out[@]}"} | awk 'NF' | sort -u
 }
 
 is_dev_running() {
@@ -95,7 +95,7 @@ is_dev_running() {
 cmd_start() {
   ensure_launch_dir
   if is_dev_running; then
-    echo "本地开发环境已在运行（PID：$(dev_pids | tr '\n' ' '))"
+    echo "本地开发环境已在运行（PID：$(dev_pids | tr '\n' ' ' | sed 's/[[:space:]]*$//'))"
     echo "日志：$LOG_FILE"
     return 0
   fi
@@ -128,10 +128,15 @@ cmd_start() {
     export BEAYY_SHADOW=1
     exec "$DEV_BIN" --open
   ' >>"$LOG_FILE" 2>&1 &
-  local wrapper_pid=$!
-  echo "$wrapper_pid" > "$PID_FILE"
-  echo "已后台启动（PID $wrapper_pid）。编译完成后会弹出「Beayy 测试版」。"
-  echo "查看进度：tail -f $LOG_FILE"
+  # bash 3.2 + set -u：local var=$! 与「$var」贴中文标点都容易炸；先抓 $! 再用 ${}
+  wrapper_pid=$!
+  if [[ -z "${wrapper_pid}" ]]; then
+    echo "后台启动失败：没有拿到进程号" >&2
+    return 1
+  fi
+  echo "${wrapper_pid}" > "$PID_FILE"
+  echo "已后台启动（PID ${wrapper_pid}）。编译完成后会弹出「Beayy 测试版」。"
+  echo "查看进度：tail -f ${LOG_FILE}"
 }
 
 cmd_exit() {
