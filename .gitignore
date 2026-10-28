@@ -2,3 +2,6 @@ target/
 .DS_Store
 Resources/AppIcon.iconset/
 .wrangler/
+
+# launch.sh 本地开发 PID／日志
+.launch/
