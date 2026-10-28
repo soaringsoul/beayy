@@ -1336,7 +1336,7 @@ const quadMeta = (id) => QUADS.find((q) => q.id === id) || QUADS[3];
 /** due_at：本地 "YYYY-MM-DDTHH:mm" 或 ISO；空＝无日期 */
 const dueParts = (due) => {
   if (!due) return { date: "", time: "" };
-  const s = String(due);
+  const s = String(due).trim().replace(/\//g, "-");
   const m = s.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
   if (m) return { date: m[1], time: `${m[2]}:${m[3]}` };
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return { date: s, time: "" };
@@ -1344,9 +1344,26 @@ const dueParts = (due) => {
   if (Number.isNaN(d.getTime())) return { date: "", time: "" };
   return { date: localDay(d), time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}` };
 };
+/** 把 date／time 输入规整成 YYYY-MM-DD、HH:mm（有的 WebView 会给出斜杠或只有一位） */
+const dueNormDate = (v) => {
+  const s = String(v || "").trim().replace(/\//g, "-");
+  const m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  return m ? `${m[1]}-${pad2(+m[2])}-${pad2(+m[3])}` : "";
+};
+const dueNormTime = (v) => {
+  const m = String(v || "").trim().match(/^(\d{1,2}):(\d{2})/);
+  return m ? `${pad2(+m[1])}:${m[2]}` : "";
+};
 const dueJoin = (date, time) => {
-  if (!date) return "";
-  return time ? `${date}T${time}` : `${date}T23:59`;
+  const d = dueNormDate(date);
+  if (!d) return "";
+  const t = dueNormTime(time);
+  return t ? `${d}T${t}` : `${d}T23:59`;
+};
+/** 新建待办的默认截止：今天＋当前时刻（空 value 的 date／time 在 macOS WebView 里仍可能「看起来」有日期，保存却是无日期） */
+const dueDefaultNow = () => {
+  const n = new Date();
+  return { date: localDay(n), time: `${pad2(n.getHours())}:${pad2(n.getMinutes())}` };
 };
 const dueLabel = (due) => {
   const { date, time } = dueParts(due);
@@ -1370,7 +1387,8 @@ const normalizeTodo = (t) => {
 
 function todoDialog(item, save, presetQuad) {
   const q0 = item ? quadOf(item) : (presetQuad || 4);
-  const dp = dueParts(item && item.due_at);
+  // 新建：显式写入今天＋现在，避免空控件「看着有日期、存下来却是无日期」；改已有条目仍按原 due_at（空＝真无日期）
+  const dp = item ? dueParts(item.due_at) : dueDefaultNow();
   const flags = QUADS.map((q) => `<button type="button" class="todo-qbtn ${q.cls}${q.id === q0 ? " is-on" : ""}" data-q="${q.id}" title="${esc(q.name)}" aria-pressed="${q.id === q0}"><span class="todo-qbadge">${q.roman}</span><span class="todo-qlabel">${esc(q.name)}</span></button>`).join("");
   openDialog({
     title: item ? "改待办" : "加一条待办", ok: item ? "保存改动" : "加上这条",
@@ -1408,8 +1426,8 @@ function todoDialog(item, save, presetQuad) {
     submit: async (el) => {
       const text = dlgVal(el, "todo-text");
       if (!text) throw "先写准备做什么。";
-      const date = (el.querySelector("#todo-date").value || "").trim();
-      const time = (el.querySelector("#todo-time").value || "").trim();
+      const date = el.querySelector("#todo-date").value;
+      const time = el.querySelector("#todo-time").value;
       const due_at = dueJoin(date, time);
       const quadrant = Math.min(4, Math.max(1, +el.querySelector("#todo-quadrant").value || 4));
       const now = new Date().toISOString();
