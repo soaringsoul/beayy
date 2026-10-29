@@ -1,0 +1,23 @@
+{
+  "type": "design",
+  "designSystems": [],
+  "primaryDesignSystem": null,
+  "assets": {
+    "今天的第一小时": {
+      "versions": [
+        {
+          "path": "今天的第一小时.html",
+          "createdAt": "2026-10-29T01:42:43.614Z",
+          "status": "needs-review",
+          "subtitle": "Beayy 闭环界面稿",
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          }
+        }
+      ]
+    }
+  },
+  "createdAt": "2026-10-29T01:42:43.619Z",
+  "updatedAt": "2026-10-29T01:42:43.619Z"
+}
