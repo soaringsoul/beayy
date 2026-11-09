@@ -145,10 +145,13 @@ fn rhythm(day: &Value) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = vec![];
     // 最长连续在电脑前
     if let Some(spans) = live["spans"].as_array() {
-        let secs = |x: &[String]| -> f64 {
-            DateTime::parse_from_rfc3339(x.first().map(String::as_str).unwrap_or(""))
-                .and_then(|a| DateTime::parse_from_rfc3339(x.get(1).map(String::as_str).unwrap_or("")).map(|b| (b - a).num_milliseconds() as f64 / 1000.0))
-                .unwrap_or(0.0)
+        let secs = |x: &Value| -> f64 {
+            let a = x.get(0).and_then(Value::as_str).and_then(|s| DateTime::parse_from_rfc3339(s).ok());
+            let b = x.get(1).and_then(Value::as_str).and_then(|s| DateTime::parse_from_rfc3339(s).ok());
+            match (a, b) {
+                (Some(a), Some(b)) => (b - a).num_milliseconds() as f64 / 1000.0,
+                _ => 0.0,
+            }
         };
         if let Some(longest) = spans.iter().map(secs).max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)) {
             if longest >= 60.0 {
