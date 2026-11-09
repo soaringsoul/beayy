@@ -1,17 +1,10 @@
-// Beayy 网页界面：今天、日总结、规矩、待办／备忘、设置。纯 JS，不用打包工具。
+// TimeSeen 网页界面：今天、日总结、规矩、待办／备忘、设置。纯 JS，不用打包工具。
 // 取数：Tauri 里用 window.__TAURI__.core.invoke（命令见 app/src-tauri/COMMANDS.md）；
 // 浏览器里读 mock/<命令名>.json（双击 file:// 打开时改读 mock/mock.js）。
 // 作息图、一天的形状、读数的画法取自 网站/static/app.js（设计系统「人生记录」）。
 
 const $app = document.getElementById("app");
 const TAURI = window.__TAURI__ && window.__TAURI__.core;
-// 手机版没有开发者工具：网页报错交给外壳记进日志（电脑版没有这个命令，调用失败就算了）
-if (TAURI) {
-  const report = (t) => { try { TAURI.invoke("web_log", { text: t }).catch(() => {}); } catch (e) {} };
-  window.addEventListener("error", (e) => report(`${e.message} @ ${e.filename}:${e.lineno}`));
-  window.addEventListener("unhandledrejection", (e) => report(`未处理：${e.reason && (e.reason.stack || e.reason.message || e.reason)}`));
-}
-
 // ---------- 取数 ----------
 
 let MOCK = null;
@@ -30,7 +23,7 @@ async function loadMock(name) {
       s.src = "mock/mock.js"; s.onload = ok; s.onerror = () => fail(new Error("读不到 mock/mock.js，先跑 mock/make_mock.py"));
       document.head.appendChild(s);
     });
-    MOCK = window.BEAYY_MOCK;
+    MOCK = window.TIMESEEN_MOCK;
   }
   return JSON.parse(JSON.stringify(MOCK[name]));
 }
@@ -52,12 +45,19 @@ async function call(cmd, args = {}) {
     finally { const ms = performance.now() - t0; if (ms > 80 && cmd !== "dev_report") perfNote(`call ${cmd} ${Math.round(ms)}ms`); }
   }
   // 浏览器里：写操作只改内存，读操作读样例
+  if (cmd.includes("focus")) return window.TimeSeenFocusDemo.call(cmd, args);
   switch (cmd) {
     case "save_rules": mockState.rules = args.rules; return null;
     case "save_todos": mockState.todos = args.todos; return null;
     case "save_memos": mockState.memos = args.memos; return null;
+    case "save_plan": mockState.plan = args.plan; return null;
+    case "get_plan": return mockState.plan || { days: {}, week: null, nudges: {} };
+    case "rule_history": return { dates: [], rules: [] };
+    case "get_week": return { start: localDay(), end: localDay(), projects: [], rules: [], items: [] };
     case "save_settings": mockState.settings = { ...(mockState.settings || await loadMock("get_settings")), ...args.settings }; return null;
     case "set_api_key": mockState.hasKey = true; return null;
+    case "list_models": return ["gpt-4.1-mini", "gpt-4.1", "deepseek-chat", "qwen-plus", "glm-4.5", "demo-unavailable"];
+    case "test_models": return args.models.map((model) => ({ model, ok: model !== "demo-unavailable", ms: 320, ...(model === "demo-unavailable" ? { error: "样例：此模型暂不可用" } : {}) }));
     case "set_paused": mockState.paused = args.paused; return null;
     case "open_permission": case "open_data_dir": console.info(`样例模式：${cmd}`, args); return null;
     case "get_rules": return mockState.rules || loadMock("get_rules");
@@ -94,6 +94,9 @@ const mdhm = (iso) => { if (!iso) return ""; const t = new Date(iso); return `${
 /** 带完整年月日的时刻（墨线文案：「同步至 2026-10-22 09:27」） */
 const ymdhm = (iso) => { if (!iso) return ""; const t = new Date(iso); return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())} ${hm(iso)}`; };
 const addDays = (d, n) => localDay(new Date(toDate(d).getTime() + 12 * 3600e3 + n * 864e5));
+const mondayOf = (ymd) => { const wd = toDate(ymd).getDay(); return addDays(ymd, wd === 0 ? -6 : 1 - wd); };
+const longestSec = (spans) => { let m = 0; for (const pair of spans || []) { const s = (Date.parse(pair[1]) - Date.parse(pair[0])) / 1000; if (s > m) m = s; } return Math.round(m); };
+const bulletsOf = (md) => String(md || "").split("\n").map((l) => l.replace(/^[-*]\s+/, "").trim()).filter((l) => l && l !== "没有");
 
 /** 每小时秒数（电脑）：数据包的 active_hours {"09": 秒}，或老数据包的 hours {"09": {app: 秒}} */
 function hourSecs(c) {
@@ -166,7 +169,7 @@ const howto = (kind, text) => `<button type="button" class="howto" data-howto="$
 document.addEventListener("click", (e) => {
   const b = e.target.closest("[data-howto]"); if (!b) return;
   e.preventDefault(); e.stopPropagation();
-  ({ screentime: screenTimeDialog, amap: amapHowtoDialog })[b.dataset.howto]?.();
+  ({ screentime: screenTimeDialog })[b.dataset.howto]?.();
 }, true);
 
 /** iCloud 屏幕使用时间怎么同步到这台 Mac：四步＋打开系统设置、现在读取 */
@@ -188,19 +191,6 @@ function screenTimeDialog() {
       S.status = await call("get_status").catch(() => S.status);
       route();
     },
-  });
-}
-
-/** 高德 Key 怎么获取 */
-function amapHowtoDialog() {
-  openDialog({
-    title: "怎么获取高德 Key", cancel: "关闭", ok: null,
-    body: `<ol class="steps">
-      <li>打开 console.amap.com，用高德账号登录，完成开发者认证</li>
-      <li>应用管理 → 创建新应用</li>
-      <li>添加 Key，服务平台选「Web 服务」：这是 Web 服务 Key</li>
-      <li>再添加一个 Key，服务平台选「Web端(JS API)」：这是地图 Key，它下面的安全密钥一起填</li></ol>
-      <p class="note">不想填 Key，可以开通官方服务。</p>`,
   });
 }
 
@@ -241,7 +231,7 @@ function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取�
     // 单行输入框里回车、任何地方 ⌘↩ 都等于点主按钮；输入法选字时的回车不算
     if (e.key === "Enter" && !e.isComposing && (e.metaKey || e.target.tagName === "INPUT")) { e.preventDefault(); d.go(); return; }
     if (e.key === "Tab") {
-      const fs = [...el.querySelectorAll("button:not(:disabled), input:not([hidden]), textarea, [tabindex='0']")];
+      const fs = [...el.querySelectorAll("button:not(:disabled), input:not([hidden]):not([type='hidden']), select, textarea, [tabindex='0']")];
       if (!fs.length) return;
       const i = fs.indexOf(document.activeElement);
       if (e.shiftKey && i <= 0) { e.preventDefault(); fs[fs.length - 1].focus(); }
@@ -250,7 +240,7 @@ function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取�
   });
   if (onOpen) onOpen(el, d);
   const first = el.querySelector(".mx-dialog-body input:not([hidden]), .mx-dialog-body textarea") || okBtn || el.querySelector("[data-dlg]");
-  if (first) { first.focus(); if (first.setSelectionRange && first.value) first.setSelectionRange(first.value.length, first.value.length); }
+  if (first) { first.focus(); if (first.setSelectionRange && first.value && (first.tagName === "TEXTAREA" || ["text", "search", "url", "tel", "password"].includes(first.type))) first.setSelectionRange(first.value.length, first.value.length); }
   return d;
 }
 
@@ -441,12 +431,6 @@ function placesSection(visits, date, convs, mode = "stays") {
     return b.kind === "go" ? `<li class="ptl-go"><span class="ptl-t"></span><span class="ptl-dot"></span><span class="ptl-b">路上 ${dur}</span></li>`
       : `<li class="ptl-none"><span class="ptl-t"></span><span class="ptl-dot"></span><span class="ptl-b">没记到 ${dur}</span></li>`;
   }).join("");
-  if (mode === "map") {
-    // 地图：左边一列简短的停留（编号、名字、起止），点哪段地图上那个点变成强调色；右边大地图
-    const list = visits.map((v, i) => `<li><button class="pm-row" data-sel="${i}"><span class="ptl-dot">${MARKS[Math.min(i, MARKS.length - 1)]}</span><span class="pm-b"><span class="pm-n" title="${esc(chainOf(v))}">${esc(placeName(v))}${badgeHtml(v)}</span>${!v.label && !v.confirmed && (v.guesses || [])[0] ? `<span class="pm-m">可能是 ${esc(shopShort(v.guesses[0].name))} ${pctText(v.guesses[0].p)}</span>` : ["auto", "remembered"].includes(v.confirmed) && (v.guesses || [])[0] ? `<span class="pm-m">${v.confirmed === "auto" ? "自动认出" : "按上次认定"} ${pctText(v.guesses[0].p)}</span>` : ""}<span class="pm-m">${visitSpan(v)} · ${spanText((visitEnd(v) - Date.parse(v.start)) / 1000)}</span></span></button></li>`).join("");
-    return `<p class="ptl-sum">${sum}</p><div class="pm-wrap"><ol class="pm-list">${list}</ol>
-      <div class="pm-map"><div class="pl-live" id="pl-live"><p class="note">在打开地图…</p></div><p class="note">地图是高德的，能拖、能缩放。只画停留的地方，虚线只表示先后；认定是哪家、改地点在「停留」里。</p></div></div>`;
-  }
   return `<p class="ptl-sum">${sum}</p><ol class="ptl" id="ptl">${rows}</ol>`;
 }
 
@@ -553,11 +537,11 @@ function placeEditor(v, anchor) {
   const row = (p, key, right) => { cands.set(key, p); const on = shops.includes(p.name); return `<button role="menuitemcheckbox" aria-checked="${on}" class="${on ? "on" : ""}" data-pk="${esc(key)}"><span class="pk-n">${esc(shopShort(p.name))}<span class="pk-t">${esc(((p.type || "").split(";")[1]) || (p.type || "").split(";")[0] || "")}</span></span>${on ? `<span class="mx-check">${ICON.check}</span>` : `<span class="mx-menu-val">${right}</span>`}</button>`; };
   const extra = shops.filter((n) => !(v.guesses || []).some((g) => g.name === n)).map((n, j) => row({ name: n }, "x" + j, "")).join("");
   const guesses = (v.guesses || []).map((g, j) => row(g, "g" + j, `${Math.round(g.distance)} 米`)).join("");
-  box.innerHTML = `${chainOf(v) ? `<div class="pe-chain">${esc(chainOf(v))}</div>` : ""}<input class="mx-input" id="pe-q" placeholder="搜店名，或直接输入" autocomplete="off">
+  box.innerHTML = `${chainOf(v) ? `<div class="pe-chain">${esc(chainOf(v))}</div>` : ""}<input class="mx-input" id="pe-q" placeholder="输入地点名称" autocomplete="off">
     <div id="pe-found"></div>
     ${extra ? `<div class="mx-menu-group">认定的</div>${extra}` : ""}
     ${guesses ? `<div class="mx-menu-group">最像的</div>${guesses}` : ""}
-    <div class="mx-menu-group">附近</div><div id="pe-near"><p class="note pe-wait">在问高德…</p></div>
+    <p class="note">地点名称仅在本机保存。</p>
     <hr><button role="menuitem" data-pe="label">${v.label ? "改这里的名字…" : "给这里起名…"}</button>
     ${shops.length ? `<button role="menuitem" data-pe="clear">${shops.length > 1 ? `都不确定，${shops.length} 家全撤销` : "不确定，退回只写区域"}</button>` : ""}`;
   anchor.appendChild(box);
@@ -576,22 +560,12 @@ function placeEditor(v, anchor) {
     if (a.dataset.pe === "clear") { await call("clear_place_pick", { id: v.id }); closeEditor(); renderToday(); }
   });
   const q = box.querySelector("#pe-q"); q.focus();
-  let timer = null;
   q.oninput = () => {
-    clearTimeout(timer);
-    const t = q.value.trim(), out = box.querySelector("#pe-found");
-    if (!t) { out.innerHTML = ""; return; }
-    timer = setTimeout(async () => {
-      const found = await call("amap_search", { text: t, lat: v.lat, lon: v.lon }).catch(() => []);
-      if (q.value.trim() !== t) return;
-      out.innerHTML = found.filter((p) => (p.distance || 0) <= 500).slice(0, 4).map((p) => row(p, "s:" + p.id, `${Math.round(p.distance || 0)} 米`)).join("")
-        + `<button role="menuitem" data-pk="t:${esc(t)}">就叫「${esc(t)}」</button><hr>`;
-    }, 350);
+    const text=q.value.trim();
+    box.querySelector("#pe-found").innerHTML=text?`<button role="menuitem" data-pk="t:${esc(text)}">就叫「${esc(text)}」</button>`:"";
   };
   q.onkeydown = (e) => { if (e.key === "Escape") closeEditor(); if (e.key === "Enter" && !e.isComposing && q.value.trim()) choose("t:" + q.value.trim()); };
-  call("amap_around", { lat: v.lat, lon: v.lon, radius: 150 })
-    .then((near) => { const el = box.querySelector("#pe-near"); if (el) el.innerHTML = near.filter((p) => !(v.guesses || []).some((g) => g.name === p.name)).slice(0, 6).map((p) => row(p, "n:" + p.id, `${Math.round(p.distance || 0)} 米`)).join("") || `<p class="note pe-wait">附近 150 米没有地点。</p>`; })
-    .catch((x) => { const el = box.querySelector("#pe-near"); if (el) el.innerHTML = `<p class="note pe-wait">${esc(String(x))}</p>`; });
+
 }
 let EDITOR = null;
 function closeEditor() { if (EDITOR) { EDITOR.remove(); EDITOR = null; } }
@@ -638,13 +612,16 @@ function actogram(rows, cur) {
 
 // ---------- 状态 ----------
 
-const S = { days: [], status: null, page: "today", rules: null, todos: null, memos: null, settings: null, draft: null };
+const S = { days: [], status: null, page: "today", rules: null, todos: null, memos: null, settings: null, draft: null, plan: null };
 
 async function boot() {
-  [S.days, S.status, S.sync, S.profile] = await Promise.all([call("list_days"), call("get_status"), call("sync_status").catch(() => ({})), call("get_profile").catch(() => ({ name: "我" }))]);
+  [S.days, S.status, S.profile] = await Promise.all([call("list_days"), call("get_status"), call("get_profile").catch(() => ({ name: "我" }))]);
   renderSide();
-  loadUpdate();
-  setInterval(loadUpdate, 10 * 60 * 1000);
+  await TimeSeenFocus.init({ native: !!TAURI, mobile: !!S.status.mobile, call, header, dialog: openDialog, closeDialog,
+    page: () => S.page, invalidateTodos: () => { S.todos = null; },
+    timeline: () => { TL.view = "timeline"; try { localStorage.setItem("today-view", "timeline"); } catch (e) {} },
+    toast: (text) => { const note = document.createElement("div"); note.className = "pom-toast"; note.setAttribute("role", "status"); note.textContent = text; document.body.appendChild(note); setTimeout(() => note.remove(), 3500); },
+  });
 }
 
 function renderSide() {
@@ -684,55 +661,28 @@ const MI = {
   quit: lu('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>'),
 };
 
-// ---------- 自动更新：后台下好了，菜单和设置里出「重启更新」 ----------
-
-/** 左下角菜单里的一行：下好了可以点；还在下就只显示 */
-function updateItem() {
-  const u = S.update || {};
-  if (!u.newer || u.updatable) return "";
-  return u.ready ? `<button role="menuitem" data-me="update">${MI.update}重启更新到 ${esc(u.latest)}</button>` : `<button role="menuitem" disabled>${MI.update}正在下载 ${esc(u.latest)}</button>`;
-}
-
-async function loadUpdate() {
-  if (!TAURI) return;
-  try { S.update = await call("update_status"); renderSide(); } catch (e) {}
-}
-
-async function applyUpdate() {
-  try { await call("update_apply"); } catch (x) { alert(`没更新成功：${x}`); }
-}
-
 function aboutSection() {
-  const u = S.update || {}, st = S.status || {};
-  const state = u.checking ? "正在检查…" : u.updatable ? u.updatable : u.error ? u.error
-    : u.newer ? (u.ready ? `${u.latest} 已经下好，重启就能用。` : `正在下载 ${u.latest}…`)
-    : u.checked ? `已是最新版本（${mdhm(u.checked)} 检查过）` : "会自动检查更新";
-  const btn = u.newer && u.ready && !u.updatable ? `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="up-go">重启更新</button>` : `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="up-check" ${u.checking ? "disabled" : ""}>检查更新</button>`;
-  return section("关于", `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">版本 ${esc(u.current || st.version || "")}</div><div class="mx-setting-desc">${esc(state)}</div>${u.newer && u.notes ? `<div class="mx-setting-desc">${esc(u.notes)}</div>` : ""}</div>${TAURI ? btn : ""}</div>`);
-}
-
-function bindAbout() {
-  const c = document.getElementById("up-check");
-  if (c) c.onclick = async () => { S.update = { ...(S.update || {}), checking: true }; renderSettings(); try { S.update = await call("update_check"); } catch (x) {} renderSide(); renderSettings(); };
-  const g = document.getElementById("up-go");
-  if (g) g.onclick = applyUpdate;
+  const st = S.status || {}, homepage = S.settings && S.settings.personal_homepage_url;
+  return section("关于", setRow("时见 TimeSeen", "看见时间，看见自己。 · 人文帮出品", `<span class="note">版本 ${esc(st.version || "")}</span>`)
+    + setRow("独立个人时间管理应用", "本地优先，AI 直接连接你配置的模型服务。", "")
+    + setRow("个人主页", homepage ? esc(homepage) : "暂未设置", homepage ? `<a class="mx-btn mx-btn--text mx-btn--sm" href="${esc(homepage)}" target="_blank" rel="noopener noreferrer">打开</a>` : ""));
 }
 
 function renderMeMenu() {
   const menu = document.getElementById("me-menu");
   if (!menu) return;
   const st = S.status || {};
-  menu.innerHTML = `<div class="mx-menu-group">${esc((S.sync && S.sync.email) || (st.device || "").replace(/^mac-/, "Mac · "))}</div>
+  menu.innerHTML = `<div class="mx-menu-group">${esc((st.device || "").replace(/^mac-/, "Mac · "))}</div>
     <button role="menuitem" data-me="settings">${MI.gear}设置<span class="mx-menu-val">⌘,</span></button>
     ${st.paused
       ? `<button role="menuitem" data-me="resume">${MI.play}继续记录${st.paused_until ? `<span class="mx-menu-val">${hm(st.paused_until)} 自动继续</span>` : ""}</button>`
       : `<button role="menuitem" data-me="pause">${MI.pause}暂停记录 1 小时</button>`}
-    <button role="menuitem" data-me="devices">${MI.devices}设备与同步</button>
+    <button role="menuitem" data-me="devices">${MI.devices}设备</button>
     <button role="menuitem" data-me="data">${MI.folder}打开数据目录</button>
     <hr>
-    ${updateItem()}<button role="menuitem" disabled>${MI.info}版本<span class="mx-menu-val">${esc(st.version || "")}</span></button>
+    <button role="menuitem" disabled>${MI.info}版本<span class="mx-menu-val">${esc(st.version || "")}</span></button>
     <hr>
-    <button role="menuitem" data-me="quit">${MI.quit}退出 Beayy</button>`;
+    <button role="menuitem" data-me="quit">${MI.quit}退出时见</button>`;
 }
 
 function toggleMe(open) {
@@ -753,7 +703,6 @@ document.getElementById("me-menu").onclick = async (e) => {
   else if (k === "devices") location.hash = "#/devices";
   else if (k === "data") call("open_data_dir");
   else if (k === "quit") call("quit_app");
-  else if (k === "update") applyUpdate();
   else { await call("set_paused", k === "pause" ? { paused: true, minutes: 60 } : { paused: false }); S.status = await call("get_status"); renderSide(); if (S.page === "settings" || S.page === "devices") route(); }
 };
 document.addEventListener("click", (e) => { if (!e.target.closest(".me-wrap")) toggleMe(false); });
@@ -787,10 +736,39 @@ const goDay = (x) => { location.hash = x && x !== localDay() ? `#/today/${x}` : 
 const TD = { date: null };
 const isPastDay = () => TD.date && TD.date !== localDay();
 
+async function loadPlan() {
+  try { S.todos = await call("get_todos"); } catch (e) { if (!Array.isArray(S.todos)) S.todos = []; }
+  try { S.plan = await call("get_plan"); } catch (e) { if (!S.plan) S.plan = { days: {}, week: null }; }
+  if (!Array.isArray(S.todos)) S.todos = [];
+  if (!S.plan || typeof S.plan !== "object") S.plan = { days: {}, week: null };
+  if (!S.plan.days) S.plan.days = {};
+}
+
+/** 昨天确认过的待办，放在今天页读数上面 */
+function commitmentHtml(date) {
+  const yday = addDays(date, -1);
+  const items = (S.todos || []).filter((t) => t && t.source === "daily" && t.from_date === yday);
+  const skipped = ((S.plan.days || {})[yday] || {}).status === "skipped";
+  const w = S.plan.week;
+  const weekLine = w && w.start && w.rule && date >= w.start && date <= addDays(w.start, 6)
+    ? `<p class="weekline">这周守着「${esc(w.rule)}」${w.project ? `，推进 ${esc(w.project)}` : ""}。</p>` : "";
+  if (skipped && !items.length) return weekLine + `<p class="mx-empty-inline">昨晚的「明天」你放下了。</p>`;
+  if (!items.length) return weekLine;
+  const open = items.filter((t) => !t.done);
+  const rows = items.map((t) => `<div class="cmt${t.done ? " is-done" : ""}">
+      <button type="button" class="todo-check q2" data-cmt="${esc(t.id)}" role="checkbox" aria-checked="${!!t.done}" aria-label="${t.done ? "标成未完成" : "标成完成"}">${t.done ? ICON.check : ""}</button>
+      <div class="cmt-main"><div class="cmt-name">${esc(t.text)}</div><div class="cmt-meta">重要不紧急${t.due_at ? ` · ${esc(dueLabel(t.due_at))}` : ""}</div></div>
+    </div>`).join("");
+  const protect = date === localDay() && open.length ? `<p class="protect"><span class="mx-tag">保护</span><span>09:30–11:30 · ${esc(open[0].text)}</span></p>` : "";
+  return `${weekLine}<section class="mx-sec cmt-sec"><div class="mx-sec-head"><h3>昨天留给你的</h3><span class="mx-sec-aside">${esc(yday.slice(5))} 确认</span></div>${rows}</section>${protect}`;
+}
+
 async function renderToday() {
   const today = isPastDay() ? TD.date : localDay(), past = today !== localDay();
+  await loadPlan();
   // 今天总有实时数据（电脑来自自采事件，手机来自 iPhone 同步），不再等每晚的数据包；以前的日子按日期取
   const d = (await call("get_day", { date: today })) || { date: today };
+  if (TimeSeenFocus.enabled()) d.focus = await TimeSeenFocus.readDay(today).catch((e) => ({ error: String(e) }));
   const pack = d.pack || {}, c = d.live || pack.computer || {}, ph = d.phone;
   const fda = ((S.status || {}).permissions || {}).full_disk_access;
   const phoneCap = ph ? (past ? (ph.pickups != null ? `拿起 ${ph.pickups} 次` : "") : `同步至 ${ymdhm(ph.synced_until)}`) : fda === false ? "未授权完全磁盘访问" : "取不到";
@@ -802,15 +780,16 @@ async function renderToday() {
   const items = timelineItems(d);
   const counts = { all: items.length, computer: items.filter((x) => x.dev === "computer").length, phone: items.filter((x) => x.dev === "phone" && !x.visit).length };
   if (sp) counts.watch = items.filter((x) => x.dev === "watch").length;
+  if ((d.focus && d.focus.sessions || []).length) counts.focus = items.filter((x) => x.dev === "focus").length;
   const tab = TL.tab in counts ? TL.tab : "all";
   const shown = items.filter((x) => tab === "all" || x.dev === tab);
   // 照 Claude：标题下一行，左边「概览｜时间线」纯文字页签；时间线后面接「全部／电脑／手机」切换块；右边放同步时刻
   // 三个页签：全面（面：这一天的汇总看板）、时间线（线：按小时）、地点（点：按停留，去了哪、认定是哪家）
   const view = TL.view === "timeline" ? "timeline" : ["places", "map"].includes(TL.view) ? "places" : "overview";
-  const pview = ["map", "often"].includes(TL.pview) ? TL.pview : "stays";
-  const pseg = `<div class="mx-seg" role="tablist" id="pl-tabs">${[["stays", "停留"], ["map", "地图"], ["often", "常去"]].map(([k, v]) =>
+  const pview = TL.pview === "often" ? "often" : "stays";
+  const pseg = `<div class="mx-seg" role="tablist" id="pl-tabs">${[["stays", "停留"], ["often", "常去"]].map(([k, v]) =>
     `<button role="tab" aria-selected="${k === pview}" class="${k === pview ? "is-on" : ""}" data-pv="${k}">${v}</button>`).join("")}</div>`;
-  const seg = `<div class="mx-seg" role="tablist" id="tl-tabs">${[["all", "全部"], ["computer", "电脑"], ["phone", "手机"], ["watch", "手表"]].filter(([k]) => k in counts).map(([k, v]) =>
+  const seg = `<div class="mx-seg" role="tablist" id="tl-tabs">${[["all", "全部"], ["computer", "电脑"], ["phone", "手机"], ["watch", "手表"], ["focus", "专注"]].filter(([k]) => k in counts).map(([k, v]) =>
     `<button role="tab" aria-selected="${k === tab}" class="${k === tab ? "is-on" : ""}" data-tab="${k}">${v}<span class="n">${counts[k]}</span></button>`).join("")}</div>`;
   const toolbar = `<div class="toolbar"><div class="toolbar-left"><div class="tabs" role="tablist" id="view-tabs">${[["overview", "全面"], ["timeline", "时间线"], ["places", "地点"]].map(([k, v]) =>
       `<button role="tab" aria-selected="${k === view}" class="${k === view ? "is-on" : ""}" data-view="${k}">${v}</button>`).join("")}</div>
@@ -819,8 +798,10 @@ async function renderToday() {
   const overview = `<div class="readouts">
         ${readout("在电脑前", hh(c.active_sec), "h", c.first ? `${c.first}–${c.last}` : "还没有记录")}
         ${readout("手机", ph || fda !== false ? hh(ph ? ph.total_sec : (pack.phone || {}).total_sec) : "—", "h", phoneCap)}
+        ${(() => { const sec = longestSec((c && c.spans) || []); return readout("最长一段", sec ? (sec < 3600 ? String(Math.round(sec / 60)) : hh(sec)) : "—", sec ? (sec < 3600 ? "分钟" : "h") : "", "连续在电脑前"); })()}
         ${sp ? readout("说话", sp.talk_sec < 3600 ? mins(sp.talk_sec) : hh(sp.talk_sec), sp.talk_sec < 3600 ? "分钟" : "h", sp.first ? `录音 ${hm(sp.first)}–${hm(sp.last)}` : past ? "这一天没有录音" : "今天还没有录音") : ""}
         ${readout("切换", c.switches ?? "—", "次", "应用之间切换")}
+        ${d.focus && !d.focus.error && d.focus.active_sec > 0 ? readout("主动专注", String(Math.round(d.focus.active_sec / 60)), "分钟", `${d.focus.completed} 个完整番茄 · 与活动时间重叠`) : ""}
         ${visits.length ? readout("去了", new Set(visits.map((v) => v.label || placeName(v).split(" · ")[0])).size, "处", `${visits.length} 段停留`) : ""}
       </div>
       <div style="margin-top:var(--space-6)">`
@@ -840,10 +821,18 @@ async function renderToday() {
 
   // 照 Claude 自定义页：标题单独一行；页签和右边的控件（同步时刻、翻日期）同一行
   $app.innerHTML = header(past ? short(today) : "今天") + toolbar
-    + `<div class="reading">${view === "timeline" ? timeline : view === "places" ? placesView : overview}</div>`;
+    + `<div class="reading">${TimeSeenFocus.todayHtml(today)}${commitmentHtml(today)}${view === "timeline" ? timeline + ((d.focus && d.focus.sessions || []).length ? '<p class="pom-timeline-note">专注是时间的标记，与电脑活动重叠，不重复计入使用时长。</p>' : "") : view === "places" ? placesView : overview}</div>`;
+  TimeSeenFocus.bind($app);
   // 地图视图铺满窗口（不受阅读宽度限制）
   $app.classList.toggle("wide", view === "places" && pview === "map");
-  if (view === "places" && pview === "map" && visits.length) drawLiveMap(visits, today, PL_SEL.date === today ? PL_SEL.i : null);
+  $app.querySelectorAll("[data-cmt]").forEach((b) => (b.onclick = async () => {
+    const x = (S.todos || []).find((t) => t.id === b.dataset.cmt);
+    if (!x) return;
+    x.done = !x.done;
+    x.updated = new Date().toISOString();
+    await call("save_todos", { todos: S.todos });
+    renderToday();
+  }));
   bindOften();
   const plTabs = document.getElementById("pl-tabs");
   if (plTabs) plTabs.onclick = (e) => {
@@ -873,16 +862,6 @@ async function renderToday() {
   $app.querySelectorAll("[data-day]").forEach((b) => (b.onclick = () => goDay(b.dataset.day)));
   $app.querySelectorAll("[data-chip]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); pickChip(visits, +b.dataset.chip, b.dataset.shop); }));
   $app.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const li = b.closest("li"); EDITOR && EDITOR.parentNode === li ? closeEditor() : placeEditor(visits[+b.dataset.edit], li); }));
-  // 点一段停留：地图上那个点变成强调色，这一行高亮；再点取消
-  $app.querySelectorAll("[data-sel]").forEach((li) => (li.onclick = (e) => {
-    if (!li.classList.contains("pm-row") && e.target.closest("button, summary, details .tl, .ptl-edit")) return;
-    if (!document.getElementById("pl-map") && !document.getElementById("pl-live")) return;
-    const i = +li.dataset.sel, same = PL_SEL.date === today && PL_SEL.i === i;
-    PL_SEL = same ? { date: null, i: null } : { date: today, i };
-    $app.querySelectorAll("[data-sel]").forEach((x) => x.classList.toggle("is-sel", !same && +x.dataset.sel === i));
-    LM.map ? liveSelect(same ? null : i, true) : drawPlaceMap(visits, same ? null : i);
-  }));
-  if (pview === "map" && PL_SEL.date === today && PL_SEL.i != null) { const li = $app.querySelector(`[data-sel="${PL_SEL.i}"]`); if (li) li.classList.add("is-sel"); }
   // 点一天的形状里的某个小时：切到时间线，滚到那个小时
   $app.querySelectorAll(".strip [data-h]").forEach((cell) => (cell.onclick = () => {
     TL.view = "timeline"; TL.jump = +cell.dataset.h;
@@ -970,16 +949,17 @@ function hourRows(d, items) {
   for (const k of keys) {
     const xs = buckets.get(k), r = roll[k];
     const comp = xs.filter((x) => x.dev === "computer"), ph = xs.filter((x) => x.dev === "phone" && x.ses), wt = xs.filter((x) => x.conv);
-    const idle = !comp.length && (!r || r.title === "不在电脑前") && k + 3600e3 <= now;
+    const focuses = xs.filter((x) => x.focus);
+    const idle = !comp.length && !focuses.length && (!r || r.title === "不在电脑前") && k + 3600e3 <= now;
     if (idle && !ph.length && !wt.length) { idleRun = idleRun ? [k, idleRun[1]] : [k, k]; continue; }
     flushIdle();
     const phSec = ph.reduce((a, x) => a + x.ses.sec, 0);
     const phApps = {};
     for (const x of ph) for (const a of x.ses.apps) phApps[a.name] = (phApps[a.name] || 0) + a.sec;
     const topPh = Object.entries(phApps).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n]) => n).join("、");
-    const latest = comp[0] && comp[0].seg;
-    const title = r && r.title !== "不在电脑前" ? r.title : comp.length ? (k + 3600e3 > now ? `进行中：${latest.title}` : latest.title) : "不在电脑前";
-    const desc = r && r.title !== "不在电脑前" ? r.description : comp.length && k + 3600e3 > now ? latest.description : "";
+    const latest = comp.find((x) => !x.seg.open)?.seg || (comp[0] && comp[0].seg);
+    const title = r && r.title !== "不在电脑前" ? r.title : latest ? latest.title : focuses.length ? `主动专注 · ${focuses[0].focus.task.title}` : "不在电脑前";
+    const desc = r && r.title !== "不在电脑前" ? r.description : latest ? latest.description : "";
     // 项目：小时摘要里按秒累计好的，没有（进行中）就用这几段的
     const pj = {};
     for (const p of (r && r.parts) || []) if (p.project) pj[p.project] = (pj[p.project] || 0) + p.sec;
@@ -1009,117 +989,6 @@ function hourRows(d, items) {
 }
 
 
-/** 地点 · 地图：高德 JS API 2.0（Key 和安全密钥在钥匙串，amap_js_config 给页面）。停留点按先后编号、虚线连起来，
- *  常去的点深一点、新地方浅一点，选中的强调色；点点和点清单互相选中；同一天自动刷新时保留缩放和位置。加载不了退回静态图 */
-const LM = { map: null, day: null, view: null, loading: null, markers: [], visits: [] };
-function loadAmapJs() {
-  if (window.AMap) return Promise.resolve(window.AMap);
-  if (LM.loading) return LM.loading;
-  LM.loading = call("amap_js_config").then((c) => new Promise((ok, fail) => {
-    if (!c || !c.key) return fail(new Error(c && c.error ? c.error : "还没有地图 Key（设置 → 连接 → 地图）"));
-    // 官方：安全密钥留在服务器，地图经中转地址取；自己的：页面里带安全密钥
-    window._AMapSecurityConfig = c.service_host ? { serviceHost: c.service_host } : { securityJsCode: c.code };
-    const sc = document.createElement("script");
-    sc.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(c.key)}&plugin=AMap.Scale,AMap.ToolBar`;
-    sc.onload = () => (window.AMap ? ok(window.AMap) : fail(new Error("地图没加载上")));
-    sc.onerror = () => fail(new Error("连不上高德地图"));
-    document.head.appendChild(sc);
-  })).catch((e) => { LM.loading = null; throw e; });
-  return LM.loading;
-}
-/** WGS-84 → GCJ-02（同电脑和手机的换算） */
-function gcjJs(lat, lon) {
-  if (lon < 72.004 || lon > 137.8347 || lat < 0.8293 || lat > 55.8271) return [lat, lon];
-  const a = 6378245.0, ee = 0.00669342162296594323, x = lon - 105, y = lat - 35, P = Math.PI;
-  let dLat = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
-  dLat += (20 * Math.sin(6 * x * P) + 20 * Math.sin(2 * x * P)) * 2 / 3 + (20 * Math.sin(y * P) + 40 * Math.sin(y / 3 * P)) * 2 / 3 + (160 * Math.sin(y / 12 * P) + 320 * Math.sin(y * P / 30)) * 2 / 3;
-  let dLon = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
-  dLon += (20 * Math.sin(6 * x * P) + 20 * Math.sin(2 * x * P)) * 2 / 3 + (20 * Math.sin(x * P) + 40 * Math.sin(x / 3 * P)) * 2 / 3 + (150 * Math.sin(x / 12 * P) + 300 * Math.sin(x / 30 * P)) * 2 / 3;
-  const rad = lat / 180 * P, m = 1 - ee * Math.sin(rad) ** 2, sq = Math.sqrt(m);
-  return [lat + dLat * 180 / ((a * (1 - ee)) / (m * sq) * P), lon + dLon * 180 / (a / sq * Math.cos(rad) * P)];
-}
-/** 地图点上的小卡片：名字、起止 · 时长、去了哪家（认定的）或最可能的一家和把握 */
-function pinCard(v, i) {
-  const dur = spanText((visitEnd(v) - Date.parse(v.start)) / 1000);
-  const g = (v.guesses || [])[0];
-  let shop = "";
-  if (v.confirmed === "picked" && (v.shops || []).length) shop = `去了 ${v.shops.map(shopShort).join("、")}`;
-  else if (v.confirmed === "auto" || v.confirmed === "remembered") shop = g ? `${v.confirmed === "auto" ? "自动认出" : "按上次认定"} ${shopShort(g.name)} ${pctText(g.p)}` : "";
-  else if (!v.label && !v.confirmed && g) shop = `可能是 ${shopShort(g.name)} ${pctText(g.p)}`;
-  return `<div class="lm-card"><div class="lm-card-n"><span class="ptl-dot">${MARKS[Math.min(i, MARKS.length - 1)]}</span>${esc(placeName(v))}${badgeHtml(v)}</div>
-    <div class="lm-card-m">${esc(visitSpan(v))} · ${esc(dur)}</div>${shop ? `<div class="lm-card-s">${esc(shop)}</div>` : ""}</div>`;
-}
-const pinHtml = (v, i, on) => `<div class="lm-pin${badgeOf(v) ? " often" : ""}${on ? " sel" : ""}${v.end ? "" : " now"}" >${MARKS[Math.min(i, MARKS.length - 1)]}</div>`;
-/** 地图跟窗口一样高（减去上面的标题和页签） */
-function fitLive(box) {
-  const h = Math.max(420, window.innerHeight - box.getBoundingClientRect().top - 48);
-  box.style.height = `${h}px`;
-}
-window.addEventListener("resize", () => { const b = document.getElementById("pl-live"); if (b) fitLive(b); });
-async function drawLiveMap(visits, date, sel) {
-  const box = document.getElementById("pl-live"); if (!box) return;
-  fitLive(box);
-  let A;
-  try { A = await loadAmapJs(); }
-  catch (e) { box.outerHTML = `<div class="pl-map-img" id="pl-map"><p class="note">${esc(String(e.message || e))}，先用静态图。</p></div>`; return drawPlaceMap(visits, sel); }
-  if (!document.body.contains(box)) return;
-  const keep = LM.day === date && LM.view;
-  if (LM.map) { try { LM.map.destroy(); } catch (e) {} }
-  box.innerHTML = "";
-  const dark = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
-  const map = new A.Map(box, { zoom: 14, mapStyle: dark ? "amap://styles/dark" : "amap://styles/whitesmoke" });
-  map.addControl(new A.Scale());
-  map.addControl(new A.ToolBar({ position: { top: "12px", right: "12px" } }));
-  const pts = visits.map((v) => { const [la, lo] = gcjJs(v.lat, v.lon); return [lo, la]; });
-  if (pts.length > 1) map.add(new A.Polyline({ path: pts, strokeColor: "#73726C", strokeWeight: 2, strokeOpacity: 0.8, strokeStyle: "dashed", strokeDasharray: [6, 6] }));
-  LM.visits = visits;
-  // 小卡片：悬停时出、移开就收；点过的那个一直开着（再点或点别的才换）
-  const card = new A.InfoWindow({ isCustom: true, anchor: "bottom-center", offset: new A.Pixel(0, -22), autoMove: false });
-  LM.pinned = null;
-  const showCard = (i) => { card.setContent(pinCard(visits[i], i)); card.open(map, pts[i]); };
-  LM.card = card;
-  LM.markers = visits.map((v, i) => {
-    const m = new A.Marker({ position: pts[i], content: pinHtml(v, i, i === sel), offset: new A.Pixel(-13, -13), zIndex: i === sel ? 200 : 100 + i });
-    m.on("mouseover", () => showCard(i));
-    m.on("mouseout", () => { if (LM.pinned == null) card.close(); else if (LM.pinned !== i) showCard(LM.pinned); });
-    m.on("click", () => {
-      LM.pinned = LM.pinned === i ? null : i;
-      if (LM.pinned == null) card.close(); else showCard(i);
-      const same = PL_SEL.i === i; PL_SEL = same ? { date: null, i: null } : { date, i };
-      $app.querySelectorAll("[data-sel]").forEach((x) => x.classList.toggle("is-sel", !same && +x.dataset.sel === i));
-      liveSelect(same ? null : i, false);
-      const row = $app.querySelector(`.pm-row[data-sel="${i}"]`); if (row && !same) row.scrollIntoView({ block: "nearest" });
-    });
-    return m;
-  });
-  map.add(LM.markers);
-  if (keep) map.setZoomAndCenter(LM.view.zoom, LM.view.center, true);
-  else map.setFitView(LM.markers, true, [80, 80, 80, 80]);
-  const save = () => { LM.view = { zoom: map.getZoom(), center: map.getCenter() }; };
-  map.on("moveend", save); map.on("zoomend", save);
-  map.on("click", () => { LM.pinned = null; card.close(); });
-  if (sel != null && pts[sel]) { LM.pinned = sel; showCard(sel); }
-  LM.map = map; LM.day = date;
-}
-/** 选中一段：那个点变强调色压在最上面；从清单点的把地图挪过去（不缩小） */
-function liveSelect(i, pan) {
-  LM.markers.forEach((m, j) => { m.setContent(pinHtml(LM.visits[j], j, j === i)); m.setzIndex(j === i ? 200 : 100 + j); });
-  if (pan && i != null && LM.map) LM.map.setZoomAndCenter(Math.max(LM.map.getZoom(), 15), LM.markers[i].getPosition());
-  if (pan && LM.card && LM.map) { LM.pinned = i; if (i == null) LM.card.close(); else { LM.card.setContent(pinCard(LM.visits[i], i)); LM.card.open(LM.map, LM.markers[i].getPosition()); } }
-}
-
-/** 地图图片缓存：停留点和选中的那段没变就不再问高德（今天页每分钟自动刷新） */
-const MAPCACHE = new Map();
-/** 今天页选中的那段停留（哪天、第几段） */
-let PL_SEL = { date: null, i: null };
-function drawPlaceMap(visits, sel) {
-  const pts = visits.map((v) => [v.lat, v.lon]), key = JSON.stringify([pts, sel, visits.map((v) => !!badgeOf(v))]);
-  const show = (html) => { const box = document.getElementById("pl-map"); if (box) box.innerHTML = html; };
-  if (MAPCACHE.has(key)) return show(MAPCACHE.get(key));
-  call("amap_map", { points: pts, width: 640, height: 600, selected: sel, often: visits.map((v) => !!badgeOf(v)) })
-    .then((src) => { const html = `<img src="${src}" alt="这天的停留点地图">`; MAPCACHE.set(key, html); if (MAPCACHE.size > 40) MAPCACHE.delete(MAPCACHE.keys().next().value); show(html); })
-    .catch((x) => show(`<p class="note">${esc(String(x))}${String(x).includes("Key") ? "（设置 → 地图）" : ""}</p>`));
-}
 const TL = {
   tab: (() => { try { return localStorage.getItem("tl-tab") || "all"; } catch (e) { return "all"; } })(),
   view: (() => { try { return localStorage.getItem("today-view") || "overview"; } catch (e) { return "overview"; } })(),
@@ -1163,6 +1032,7 @@ function timelineItems(d) {
   DAY_COMPUTERS = d.computers || [];
   DAY_NAMES = d.device_names || {};
   const out = [];
+  for (const f of (d.focus && d.focus.sessions) || []) out.push({ dev: "focus", start: f.started_at, end: f.ended_at, focus: f });
   for (const s of d.segments || []) out.push({ dev: "computer", start: s.start, end: s.end, seg: s });
   for (const x of (d.phone && d.phone.sessions) || []) out.push({ dev: "phone", start: x.start, end: x.end, ses: x });
   for (const v of (d.places && d.places.visits) || []) out.push({ dev: "phone", start: v.start, end: v.end, visit: v });
@@ -1199,6 +1069,10 @@ function convRow(c, h, t) {
 function tlRow(x) {
   const t = `<span class="t">${hm(x.start)}–${x.end ? hm(x.end) : "现在"}</span>`;
   const h = `data-h="${localHour(x.start)}"`;
+  if (x.focus) {
+    const f = x.focus;
+    return `<div class="tl-row focus" ${h}>${t}<span><span class="name">${TimeSeenFocus.ico("timer")}${esc(f.task.title)}<span class="mx-tag">专注 · ${Math.round((f.day_sec ?? f.active_ms / 1000) / 60)} 分钟${f.reason === "early" ? " · 提前结束" : ""}</span></span>${f.note ? `<div class="desc">${esc(f.note)}</div>` : ""}${f.task.project ? `<div class="desc">关联项目 · ${esc(f.task.project)}</div>` : ""}</span></div>`;
+  }
   if (x.conv) return convRow(x.conv, h, t);
   if (x.visit) return `<div class="tl-row phone place" ${h}>${t}<span><span class="name">在 ${esc(x.visit.name || "没有地名的地方")}</span></span></div>`;
   if (x.dev === "phone") {
@@ -1241,14 +1115,93 @@ async function loadIcons() {
 
 // ---------- 日总结 ----------
 
-const SUM = { err: null };
+const SUM = { err: null, picks: [], forDate: null, lastDate: null };
+
+function tomorrowHtml(date, sum) {
+  if (!sum) return "";
+  const part = sum.parts.find((p) => p.title === "明天");
+  const lines = bulletsOf(part && part.body);
+  const saved = (S.plan.days || {})[date] || {};
+  const already = saved.status === "committed" || (S.todos || []).some((t) => t.source === "daily" && t.from_date === date);
+  if (saved.status === "skipped" && !already) return section("明天", `<p class="mx-empty-inline">这晚的明天你放下了。</p>`);
+  if (!lines.length) return "";
+  if (SUM.forDate !== date || SUM.picks.length !== lines.length) { SUM.forDate = date; SUM.picks = lines.map(() => true); }
+  const rows = lines.map((text, i) => {
+    const on = already || !!SUM.picks[i];
+    return `<div class="cmt${on ? "" : " is-off"}"><button type="button" class="todo-check q2" data-pick="${i}" role="checkbox" aria-checked="${on}" ${already ? "disabled" : ""}>${on ? ICON.check : ""}</button><div class="cmt-main"><div class="cmt-name">${esc(text)}</div><div class="cmt-meta">约 25 分钟 · 重要不紧急 · 次日 09:30</div></div></div>`;
+  }).join("");
+  const n = (SUM.picks || []).filter(Boolean).length;
+  const acts = already
+    ? `<p class="note" style="margin-top:8px">这晚的明天已经写成待办。</p>`
+    : `<div class="commit-acts"><button type="button" class="mx-btn mx-btn--primary" id="cmt-commit" ${n ? "" : "disabled"}>写成明天的 ${n} 条</button><button type="button" class="mx-btn mx-btn--text" id="cmt-skip">今晚先不承诺</button></div>`;
+  return section("明天", `<p class="note">勾着的写成次日 09:30 的待办，默认重要不紧急。放下的不会进待办。</p>${rows}${acts}`);
+}
+
+async function commitTomorrow(date, lines) {
+  const chosen = lines.filter((_, i) => SUM.picks[i]);
+  const dropped = lines.filter((_, i) => !SUM.picks[i]);
+  const now = new Date().toISOString();
+  const due = dueJoin(addDays(date, 1), "09:30");
+  if (!Array.isArray(S.todos)) S.todos = [];
+  for (const text of chosen) {
+    if (S.todos.some((t) => t.source === "daily" && t.from_date === date && t.text === text)) continue;
+    S.todos.unshift({ id: "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), text, done: false, due_at: due, quadrant: 2, source: "daily", from_date: date, created: now, updated: now });
+  }
+  await call("save_todos", { todos: S.todos });
+  S.plan.days[date] = { status: "committed", dropped };
+  await call("save_plan", { plan: S.plan });
+}
+
+async function renderWeek() {
+  markNav("summary");
+  await loadPlan();
+  const w = await call("get_week", { date: localDay() }).catch(() => null);
+  const kinds = `<div class="tabs" role="tablist"><button type="button" role="tab" id="go-day">日</button><button type="button" role="tab" class="is-on" aria-selected="true">周</button><button type="button" role="tab" disabled title="先不做月">月</button></div>`;
+  if (!w) { $app.innerHTML = header("总结") + `<div class="toolbar">${kinds}</div>` + emptyInline("这一周的数还取不到。"); document.getElementById("go-day").onclick = () => { location.hash = SUM.lastDate ? `#/summary/${SUM.lastDate}` : "#/summary"; }; return; }
+  const max = Math.max(...(w.projects || []).map((p) => p.sec), 1);
+  const total = (w.projects || []).reduce((a, p) => a + p.sec, 0) || 1;
+  const bars = (w.projects || []).map((p) => `<div class="bar-row"><span class="bar-chev"></span><span class="bar-name">${esc(p.name)}</span><span class="bar"><i style="width:${Math.max(2, Math.round((p.sec / max) * 100))}%"></i></span><span class="bar-v mono">${p.sec < 3600 ? Math.round(p.sec / 60) + "m" : hh(p.sec) + "h"}</span><span class="bar-p mono">${Math.round((p.sec / total) * 100)}%</span></div>`).join("");
+  const rules = (w.rules || []).map((r) => `<div class="week-rule"><span>${esc(r.text)}</span><span class="streak">${(r.marks || []).map((m) => `<i class="${esc(m)}"></i>`).join("")}</span><b class="mono">${r.total ? `${r.kept}/${r.total}` : "—"}</b></div>`).join("");
+  const items = (w.items || []).map((t) => `<div class="cmt${t.done ? " is-done" : ""}${t.dropped ? " is-off" : ""}"><span class="todo-check q2" aria-checked="${!!t.done}">${t.done ? ICON.check : ""}</span><div class="cmt-main"><div class="cmt-name">${esc(t.text)}</div>${t.dropped ? `<div class="cmt-meta">放下了</div>` : t.done ? "" : `<div class="cmt-meta">没做</div>`}</div></div>`).join("");
+  const doneN = (w.items || []).filter((t) => t.done).length;
+  const dropN = (w.items || []).filter((t) => t.dropped).length;
+  const openN = (w.items || []).filter((t) => !t.done && !t.dropped).length;
+  const ruleBtns = (w.rules || []).filter((r) => r.text).map((r, i) => `<button type="button" data-wrule aria-checked="${i === 0 ? "true" : "false"}">${esc(r.text)}</button>`).join("");
+  const projBtns = (w.projects || []).slice(0, 6).map((p, i) => `<button type="button" data-wproj aria-checked="${i === 0 ? "true" : "false"}">${esc(p.name)}</button>`).join("");
+  $app.innerHTML = header("总结") + `<div class="toolbar">${kinds}<span class="daychip mono">${esc(w.start.slice(5))}–${esc(w.end.slice(5))}</span></div>` + `<div class="reading">
+    ${section("时间花在哪", bars || `<p class="mx-empty-inline">这一周还没有分成项目的时间。</p>`, { aside: "七天合计" })}
+    ${section("规矩", rules || `<p class="mx-empty-inline">还没有规矩。</p>`, { aside: "守住了几天" })}
+    ${section("承诺", items || `<p class="mx-empty-inline">这周还没有从日总结写成的待办。</p>`, { aside: `完成 ${doneN} · 没做 ${openN} · 放下 ${dropN}` })}
+    ${section("这周", `<p class="note">选完以后，这周剩下的「今天」顶上都会靠着它们。</p>
+      ${ruleBtns ? `<div class="pick-block"><div class="k">只守一条</div><div class="choices" id="rule-choices">${ruleBtns}</div></div>` : ""}
+      ${projBtns ? `<div class="pick-block"><div class="k">只推进一个项目</div><div class="choices" id="proj-choices">${projBtns}</div></div>` : ""}
+      <div class="commit-acts"><button type="button" class="mx-btn mx-btn--primary" id="week-set" ${ruleBtns ? "" : "disabled"}>就按这个</button></div>`)}
+  </div>`;
+  document.getElementById("go-day").onclick = () => { location.hash = SUM.lastDate ? `#/summary/${SUM.lastDate}` : "#/summary"; };
+  $app.querySelectorAll(".choices").forEach((box) => (box.onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    box.querySelectorAll("button").forEach((x) => x.setAttribute("aria-checked", x === b ? "true" : "false"));
+  }));
+  const set = document.getElementById("week-set");
+  if (set) set.onclick = async () => {
+    const rule = ($app.querySelector("#rule-choices [aria-checked='true']") || {}).textContent || "";
+    const project = ($app.querySelector("#proj-choices [aria-checked='true']") || {}).textContent || "";
+    if (!rule) return;
+    S.plan.week = { start: mondayOf(localDay()), rule, project };
+    await call("save_plan", { plan: S.plan });
+    location.hash = "#/today";
+  };
+}
 
 async function renderSummary(arg) {
+  if (arg === "week") return renderWeek();
+  await loadPlan();
   // 同「今天」翻日期：本地今天即使还没进 list_days（摘要未写出）也要能打开总结页
   const now = localDay();
   const dates = [...new Set([now, ...S.days.map((x) => x.date)])].sort().reverse();
   const date = dates.includes(arg) ? arg : dates[0];
   if (!date) { $app.innerHTML = header("总结") + emptyInline("还没有日数据。"); return; }
+  SUM.lastDate = date;
   markNav("summary");
   const i = dates.indexOf(date);
   const prev = dates[i + 1], next = dates[i - 1];
@@ -1285,22 +1238,39 @@ async function renderSummary(arg) {
   if (after) rows[rows.length - 1].next = { hc: hourMinutes(after.hc), hp: hourMinutes(after.hp) };
 
   // 布局照 Claude「自定义」页：标题单独一行；下面一行左边 日／周／月 页签（周、月后续做），右边翻日期
-  const kinds = `<div class="tabs" role="tablist"><button role="tab" aria-selected="true" class="is-on">日</button><button role="tab" aria-selected="false" disabled title="后续做">周</button><button role="tab" aria-selected="false" disabled title="后续做">月</button></div>`;
+  const kinds = `<div class="tabs" role="tablist"><button type="button" role="tab" aria-selected="true" class="is-on">日</button><button type="button" role="tab" id="go-week">周</button><button type="button" role="tab" disabled title="先不做月">月</button></div>`;
+  const lines = bulletsOf(sum && (sum.parts.find((p) => p.title === "明天") || {}).body);
   $app.innerHTML = header("总结") + `<div class="toolbar">${kinds}<div class="toolbar-right">${right}</div></div>` + `<div class="reading">
+    ${tomorrowHtml(date, sum)}
     <div class="readouts">
       ${readout("在电脑前", hh(c.active_sec ?? idx.active_sec), "h", c.first ? `${c.first}–${c.last}` : "取不到")}
       ${readout("手机", hh(ph ? ph.total_sec : pp.total_sec ?? idx.phone_sec), "h", ph ? `同步至 ${ymdhm(ph.synced_until)}` : pp.synced_at ? `同步至 ${pp.synced_at}` : "取不到")}
       ${readout("拿起", ph ? ph.pickups : pp.pickups ?? "—", "次", "", false, "按前台空档推算")}
       ${readout("熬夜", hasNight ? night : "—", "分钟", "21:00–5:00", night > 10)}
     </div>
-    ${sum && sum.note ? `<p class="note" style="margin:var(--space-3) 0 0">${esc(sum.note)}</p>` : ""}
+    ${sum ? `<div class="gen-empty" style="margin:var(--space-3) 0 0">${sum.note ? `<p class="note">${esc(sum.note)}</p>` : ""}<button class="mx-btn mx-btn--secondary mx-btn--sm" id="gen-daily">更新总结</button>${SUM.err ? `<div class="mx-field-error">${esc(SUM.err)}</div>` : ""}</div>` : ""}
     <div style="margin-top:var(--space-6)">
-      ${sum ? sum.parts.map((p) => section(p.title, p.title === "今天的一句话" ? `<p class="quote">${esc(p.body)}</p>` : md(p.body))).join("")
+      ${sum ? sum.parts.filter((p) => p.title !== "明天").map((p) => section(p.title, p.title === "今天的一句话" ? `<p class="quote">${esc(p.body)}</p>` : md(p.body))).join("")
             : section("这一天", `<div class="gen-empty"><p class="mx-empty-inline">还没有日总结，21:30 自动生成</p>
                 <button class="mx-btn mx-btn--primary mx-btn--sm" id="gen-daily">现在生成</button>${SUM.err ? `<div class="mx-field-error">${esc(SUM.err)}</div>` : ""}</div>`)}
       ${section("最近 14 天", actogram(rows, date))}
     </div></div>`;
 
+  const weekBtn = document.getElementById("go-week");
+  if (weekBtn) weekBtn.onclick = () => { location.hash = "#/summary/week"; };
+  $app.querySelectorAll("[data-pick]").forEach((b) => (b.onclick = () => {
+    const i = +b.dataset.pick;
+    SUM.picks[i] = !SUM.picks[i];
+    renderSummary(date);
+  }));
+  const commitBtn = document.getElementById("cmt-commit");
+  if (commitBtn) commitBtn.onclick = async () => { commitBtn.disabled = true; await commitTomorrow(date, lines); renderSummary(date); };
+  const skipBtn = document.getElementById("cmt-skip");
+  if (skipBtn) skipBtn.onclick = async () => {
+    S.plan.days[date] = { status: "skipped", dropped: lines };
+    await call("save_plan", { plan: S.plan });
+    renderSummary(date);
+  };
   const gen = document.getElementById("gen-daily");
   if (gen) gen.onclick = async () => {
     gen.disabled = true; gen.textContent = "生成中…"; SUM.err = null;
@@ -1405,7 +1375,7 @@ function todoDialog(item, save, presetQuad) {
         <div class="todo-qgrid" id="todo-quad" role="group" aria-label="四象限">${flags}</div>
         <input type="hidden" id="todo-quadrant" value="${q0}">
       </div>
-      <p class="note">只存在这台电脑，⌘↩ 保存。</p>
+      <p class="note">只存在这台电脑。新加的默认重要不紧急。⌘↩ 保存。</p>
     </div>`,
     onOpen: (el) => {
       const hid = el.querySelector("#todo-quadrant");
@@ -1474,9 +1444,9 @@ function todoBoardRow(t) {
       <button class="todo-check ${q.cls}" role="checkbox" aria-checked="${!!t.done}" aria-label="${t.done ? "标成未完成" : "标成完成"}" data-act="toggle">${t.done ? ICON.check : ""}</button>
       <div class="mx-row-main">
         <div class="mx-row-name">${esc(t.text)}</div>
-        <div class="todo-meta">${due ? `<span class="todo-due-l${over ? " over" : ""}">${over ? "已过期 · " : ""}${esc(due)}</span>` : `<span class="todo-due-l muted">无日期</span>`}</div>
+        <div class="todo-meta">${due ? `<span class="todo-due-l${over ? " over" : ""}">${over ? "已过期 · " : ""}${esc(due)}</span>` : `<span class="todo-due-l muted">无日期</span>`}${t.source === "daily" && t.from_date ? `<span class="todo-due-l"> · 来自 ${esc(String(t.from_date).slice(5))} 的日总结</span>` : ""}</div>
       </div>
-      <div class="acts"><button class="mx-btn mx-btn--text mx-btn--sm" data-act="edit">改</button><button class="mx-btn mx-btn--text mx-btn--sm" data-act="delete">删除</button></div>
+      <div class="acts">${!t.done && TimeSeenFocus.enabled() ? `<button class="mx-btn mx-btn--text mx-btn--sm" data-act="focus">${TimeSeenFocus.ico("timer")}专注</button>` : ""}<button class="mx-btn mx-btn--text mx-btn--sm" data-act="edit">改</button><button class="mx-btn mx-btn--text mx-btn--sm" data-act="delete">删除</button></div>
     </div>
     ${NS.deleting === t.id ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>删除这条待办？</b><span>删了找不回来。</span></div><button class="mx-btn mx-btn--secondary" data-act="keep">取消</button><button class="mx-btn mx-btn--danger" data-act="remove">删除这条</button></div>` : ""}
   </div>`;
@@ -1531,13 +1501,14 @@ async function renderNotes(arg) {
         <div class="todo-board" role="list">${cells}</div>
         ${done.length ? section("已完成", done.map(todoBoardRow).join(""), { count: done.length }) : ""}
       </div>`;
-    document.getElementById("add").onclick = () => { NS.deleting = null; todoDialog(null, saveTodos, 4); };
+    document.getElementById("add").onclick = () => { NS.deleting = null; todoDialog(null, saveTodos, 2); };
     document.getElementById("notes").onclick = async (e) => {
       const addQ = e.target.closest('[data-act="add-q"]');
       if (addQ) { NS.deleting = null; return todoDialog(null, saveTodos, +addQ.dataset.q); }
       const b = e.target.closest("[data-act]"); if (!b) return;
       const box = b.closest("[data-id]"); if (!box) return;
       const id = box.dataset.id, act = b.dataset.act;
+      if (act === "focus") return TimeSeenFocus.fromTodo(S.todos.find((x) => x.id === id));
       if (act === "edit") { NS.deleting = null; return todoDialog(S.todos.find((x) => x.id === id), saveTodos); }
       if (act === "delete") { NS.deleting = id; return renderNotes("todos"); }
       if (act === "keep") { NS.deleting = null; return renderNotes("todos"); }
@@ -1664,12 +1635,19 @@ function ruleDialog(r, save) {
 async function renderRules() {
   if (!S.rules) S.rules = await call("get_rules");
   const rules = S.rules;
-  const today = await call("get_day", { date: localDay() }).catch(() => null);
+  const [today, hist] = await Promise.all([call("get_day", { date: localDay() }).catch(() => null), call("rule_history", { days: 14 }).catch(() => null)]);
+  const marksOf = Object.fromEntries(((hist && hist.rules) || []).filter((r) => r && r.id).map((r) => [r.id, r.marks || []]));
   const verdict = (r) => {
     if (r.enabled === false) return `<div class="verdict muted">暂不对照</div>`;
     const c = checkRule(parseRule(r.text) || {}, today);
-    if (!c) return `<div class="verdict muted">这条算不出来，交给日总结对照</div>`;
-    return `<div class="verdict ${c.ok === null ? "muted" : c.ok ? "ok" : "over"}"><span>${esc(c.label)}</span>${c.value ? `<b>${esc(c.value)}</b>` : ""}${c.ok === null ? "" : c.ok ? ` · 守住了` : ` · 没守住`}</div>`;
+    const marks = marksOf[r.id] || [];
+    const todayMark = marks[marks.length - 1];
+    const dots = marks.length ? `<div class="streak" title="最近 ${marks.length} 天">${marks.map((m) => `<i class="${esc(m)}"></i>`).join("")}</div>` : "";
+    if (!c) return `<div class="verdict muted"><span>这条算不出来，交给日总结对照</span> <button type="button" class="mx-btn mx-btn--text mx-btn--sm" data-act="rewrite">改成能算的</button></div>`;
+    const warn = todayMark === "warn" && c.ok;
+    const cls = c.ok === null ? "muted" : warn ? "warn" : c.ok ? "ok" : "over";
+    const tail = c.ok === null ? "" : warn ? " · 到八成，菜单栏会说一次" : c.ok ? " · 守住了" : " · 没守住";
+    return `<div class="verdict ${cls}"><span>${esc(c.label)}</span>${c.value ? `<b>${esc(c.value)}</b>` : ""}${tail}</div>${dots}`;
   };
   const row = (r, i) => `<div class="rule${r.enabled === false ? " off" : ""}" data-id="${r.id}">
       <div class="mx-row"><span class="mx-row-mark mono">${i + 1}</span>
@@ -1681,6 +1659,7 @@ async function renderRules() {
     </div>`;
   $app.innerHTML = header("规矩", `<button class="mx-btn mx-btn--primary" id="add">加一条规矩</button>`)
     + `<div class="reading" id="rules">
+      ${rules.length ? `<p class="legend-dots"><i></i>守住 <i class="miss"></i>没守住 <i class="warn"></i>到八成 <i class="open"></i>还没到点</p>` : ""}
       ${rules.length ? rules.map(row).join("") : emptyInline("用自己的话写一条规矩，比如「21:00 以后不开电脑」")}
     </div>`;
   const save = async () => { await call("save_rules", { rules: S.rules }); renderRules(); };
@@ -1690,7 +1669,7 @@ async function renderRules() {
   document.getElementById("rules").onclick = async (e) => {
     const b = e.target.closest("[data-act]"); if (!b) return;
     const box = b.closest("[data-id]"), id = box.dataset.id, act = b.dataset.act;
-    if (act === "edit") { RS.deleting = null; return ruleDialog(S.rules.find((r) => r.id === id), save); }
+    if (act === "edit" || act === "rewrite") { RS.deleting = null; return ruleDialog(S.rules.find((r) => r.id === id), save); }
     if (act === "delete") { RS.deleting = id; return renderRules(); }
     if (act === "keep") { RS.deleting = null; return renderRules(); }
     if (act === "remove") { S.rules = S.rules.filter((r) => r.id !== id); RS.deleting = null; return save(); }
@@ -1701,7 +1680,7 @@ async function renderRules() {
 
 // ---------- 设备：绑定的电脑和手机，各自的记录状态 ----------
 
-const DS = { open: null, msg: null, err: null, busy: false, account: null, removing: null };
+const DS = { devs: null, names: {} };
 const DEV_ICON = {
   mac: '<svg class="mx-ico lu" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
   win: '<svg class="mx-ico lu" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
@@ -1714,11 +1693,9 @@ const numText = (n) => Number(n || 0).toLocaleString("en-US");
 /** 设备页：照墨线的列表页和设置页——「设备」一组（一台一行，点进去是设备详情页）、「同步」一组（设置行）。
  *  本机缺权限时顶上一条提示 */
 async function renderDevices() {
-  const [devs, st, sy] = await Promise.all([call("list_devices").catch(() => []), call("get_status"), call("sync_status").catch(() => ({}))]);
-  // 登录着的设备：进页面取一次，失败（没网、令牌失效）就不显示
-  if (sy.email && !sy.need_login && !DS.account) { DS.account = {}; call("account_info").then((a) => { DS.account = a; if (S.page === "devices" && !DEV.id) renderDevices(); }).catch(() => {}); }
-  S.status = st; S.sync = sy; renderSide();
-  // 登录着的设备列表也用改过的名字
+  const [devs, st] = await Promise.all([call("list_devices").catch(() => []), call("get_status")]);
+  S.status = st; renderSide();
+  // 设备显示名保存在本机
   DS.names = Object.fromEntries(devs.filter((d) => d.custom).map((d) => [d.id, d.name]));
   DS.devs = devs;
   const perm = st.permissions || {};
@@ -1727,17 +1704,13 @@ async function renderDevices() {
   const notice = me && missing.length ? `<div class="mx-notice"><span>这台电脑缺${missing.join("、")}权限，记不全。</span><a class="mx-btn mx-btn--secondary mx-btn--sm" href="#/devices/${encodeURIComponent(me.id)}">去处理</a></div>` : "";
   const adding = `<div class="add-dev">
       <div class="add-opt">${DEV_ICON.iphone}<div><b>iPhone</b><span>不用装 app。iPhone 上打开 设置 → 屏幕使用时间 →「跨设备共享」，用同一个 Apple 账号，这台 Mac 就能读到。</span></div></div>
-      <div class="add-opt">${DEV_ICON.mac}<div><b>另一台 Mac</b><span>装上 Beayy，在设置里用同一个账号登录，记录就会同步过来，出现在下面的列表里。</span></div></div>
-      <div class="add-opt">${DEV_ICON.win}<div><b>Windows 电脑</b><span>装上 Windows 版，用同一个账号登录。记的内容和 Mac 一样（打字、点击、界面文字、切换程序、在不在电脑前），还在试用。</span></div></div>
     </div>`;
   const rows = devs.map((d) => `<a class="mx-row" href="#/devices/${encodeURIComponent(d.id)}"><span class="mx-row-mark">${DEV_ICON[d.kind] || DEV_ICON.mac}</span>
-      <span class="mx-row-main"><div class="mx-row-name">${esc(d.name)}${d.this ? `<span class="mx-tag">本机</span>` : ""}${d.synced ? `<span class="mx-tag">经同步</span>` : ""}</div><div class="mx-row-desc">${devStatus(d, st)}</div></span>
+      <span class="mx-row-main"><div class="mx-row-name">${esc(d.name)}${d.this ? `<span class="mx-tag">本机</span>` : ""}</div><div class="mx-row-desc">${devStatus(d, st)}</div></span>
       <span class="mx-row-side">${ICON.chevR}</span></a>`).join("");
   $app.innerHTML = header("设备", `<button class="mx-btn mx-btn--primary" id="add-dev">添加设备</button>`)
-    + `<div class="reading">${notice}${section("设备", rows ? `<div class="mx-list">${rows}</div>` : emptyInline("还没有设备"))}${syncSection(sy)}</div>`;
+    + `<div class="reading">${notice}${section("设备", rows ? `<div class="mx-list">${rows}</div>` : emptyInline("还没有设备"))}</div>`;
   document.getElementById("add-dev").onclick = () => openDialog({ title: "添加设备", body: adding, cancel: "关闭" });
-  bindSync();
-  if (sy.running || DS.busy) pollSync();
 }
 
 /** 设备一行下面那句状态 */
@@ -1749,12 +1722,11 @@ function devStatus(d, st) {
     return `<span class="dot ${cls}"></span>${text} · 今天已记 ${numText(st.events_today)} 条`;
   }
   const m = String((st && st.phone_sync) || "").match(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/);
-  if (d.kind === "iphone" && !d.synced) {
+  if (d.kind === "iphone") {
     // 超过一天没有新数据：变提醒样式
     const at = m ? m[0] : d.last, stale = !at || Date.now() - Date.parse(at) > 86400e3;
     return `<span class="dot ${stale ? "warn" : "ok"}"></span>同步至 ${ymdhm(at) || "—"} · ${howto("screentime", "怎么设置")}`;
   }
-  if (d.synced) return `经同步 · 最近一条 ${ymdhm(d.last)}`;
   return `最近一条 ${ymdhm(d.last)}`;
 }
 
@@ -1818,7 +1790,7 @@ const EV_TYPES = {
   presence: ["在不在", ["presence", "heartbeat", "screen.", "system."]],
   speech: ["对话", ["speech."]],
   place: ["位置", ["place.visit"]],
-  bg: ["后台", ["sync.run", "summary.run", "phone.sync", "relay.sync", "app.launch", "app.quit", "permission.", "tap.started"]],
+  bg: ["后台", ["summary.run", "phone.sync", "app.launch", "app.quit", "permission.", "tap.started"]],
 };
 const EV_KINDS = { mac: ["all", "input", "mouse", "switch", "ui", "presence", "bg"], win: ["all", "input", "mouse", "switch", "ui", "presence", "bg"], iphone: ["all", "switch", "place"], watch: ["all", "speech", "place"] };
 
@@ -1826,7 +1798,7 @@ const EV_KINDS = { mac: ["all", "input", "mouse", "switch", "ui", "presence", "b
 function evTag(t) {
   const m = { "keyboard.text_input": "打字", "keyboard.submit": "发送", "keyboard.return": "回车", "keyboard.shortcut": "快捷键", "mouse.click": "点击", "mouse.scroll": "滚动",
     "app.activated": "切换", "window.changed": "窗口", "app.focus": "前台", "ui.text": "界面文字", heartbeat: "心跳", presence: "在不在", "speech.utterance": "说话", "speech.segment": "录音",
-    "place.visit": "停留", "sync.run": "同步", "summary.run": "摘要", "phone.sync": "读 iPhone", "relay.sync": "拉录音", "app.launch": "启动", "app.quit": "退出" };
+    "place.visit": "停留", "summary.run": "摘要", "phone.sync": "读 iPhone", "app.launch": "启动", "app.quit": "退出" };
   return m[t] || (/^(screen|system)\./.test(t) ? "屏幕" : /^permission\./.test(t) ? "权限" : t);
 }
 
@@ -1866,12 +1838,10 @@ function evText(e) {
     case "speech.utterance": return `${e.speaker || "未辨"}：${clip(String(e.text || ""), 120)}`;
     case "speech.segment": return `录了一段 ${durText(e.audio_sec || 0)}，有人说话 ${durText(e.speech_sec || 0)}${e.battery != null ? `，电量 ${Math.round(e.battery * 100)}%` : ""}`;
     case "place.visit": return `${e.depart ? "离开" : "到了"} ${e.label || e.name || "没有地名的地方"}`;
-    case "sync.run": return `同步一轮：传 ${e.uploaded || 0} 段、收 ${e.downloaded || 0} 段${e.errors ? `，${e.errors} 个错` : ""}`;
     case "summary.run": return `写了 ${e.written || 0} 段摘要（${e.seconds || 0} 秒）`;
     case "phone.sync": return `从 iCloud 读到 iPhone 新记录 ${numText(e.added)} 条`;
-    case "relay.sync": return `同步来 ${numText(e.added)} 条`;
-    case "app.launch": return `Beayy ${e.version || ""} 启动${e.shadow ? "（测试版）" : ""}`;
-    case "app.quit": return "Beayy 退出";
+    case "app.launch": return `TimeSeen ${e.version || ""} 启动${e.shadow ? "（测试版）" : ""}`;
+    case "app.quit": return "TimeSeen 退出";
     case "tap.started": return "开始监听键盘和鼠标";
     case "permission.requested": return `申请${{ accessibility: "辅助功能", input_monitoring: "输入监控", full_disk_access: "完全磁盘访问" }[e.service] || e.service || ""}权限`;
     case "permission.changed": return "权限变了";
@@ -1964,88 +1934,10 @@ function renameDialog(d, done) {
   });
 }
 
-/** 同步进行中：每 2 秒只刷新同步卡片（进度条），同步完了整页重画一次（设备列表、最近一条会变） */
-let SYNC_POLL = null;
-function pollSync() {
-  if (SYNC_POLL) return;
-  SYNC_POLL = setTimeout(async function tick() {
-    SYNC_POLL = null;
-    if (S.page !== "devices" || DEV.id) return;
-    const sy = await call("sync_status").catch(() => null);
-    const card = document.getElementById("sync-sec");
-    if (!sy || !card) return;
-    if (!sy.running && !DS.busy) return renderDevices();
-    card.outerHTML = syncSection(sy);
-    bindSync();
-    SYNC_POLL = setTimeout(tick, 2000);
-  }, 2000);
-}
-
-/** 多设备同步：设备页「同步」一组设置行——账号、登录着的设备（点开小弹层，可移除）、立即同步。没登录就引导登录 */
-function syncSection(sy) {
-  if (sy.shadow) return "";
-  const msg = DS.err ? `<div class="mx-field-error">${esc(DS.err)}</div>` : DS.msg ? `<p class="note">${esc(DS.msg)}</p>` : "";
-  const row = (name, desc, side) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div>${desc ? `<div class="mx-setting-desc">${desc}</div>` : ""}</div>${side}</div>`;
-  const wrap = (rows) => section("同步", `<div class="rows">${rows}</div>${msg}`).replace('<section class="mx-sec"', '<section class="mx-sec" id="sync-sec"');
-  if (!sy.configured) return wrap(row("多设备同步", "登录后，多台设备的记录会同步",
-    `<span class="mx-status">没登录</span><span class="btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-signup">注册</button><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">登录</button></span>`));
-  if (!sy.email) return wrap(row("多设备同步", "旧版配对码账号，设好邮箱和主密码就能在别的设备登录",
-    `<span class="mx-status mx-status--warn">要设账号</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-claim">设好账号</button>`));
-  if (sy.need_login) return wrap(row("多设备同步", "登录已失效，重新登录后接着同步",
-    `<span class="mx-status mx-status--warn">要重新登录</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">重新登录</button>`));
-  const sessions = (DS.account && DS.account.sessions) || [];
-  const pg = sy.progress || {};
-  const busy = sy.running || DS.busy;
-  const going = busy && pg.phase && pg.total > 0;
-  const bar = going ? `<div class="sync-prog"><div class="sync-prog-text"><span>${pg.phase === "upload" ? "上传" : "下载"}</span><span class="mono">${numText(pg.done)} / ${numText(pg.total)} 段</span></div><div class="bar"><i style="width:${Math.min(100, Math.round((pg.done / pg.total) * 100))}%"></i></div></div>` : "";
-  const state = busy ? `<span class="mx-status">同步中…</span>` : sy.last_error ? `<span class="mx-status mx-status--warn">上次有错</span>` : `<span class="mx-status mx-status--ok">已开${sy.last ? ` · 上次 ${ymdhm(sy.last)}` : ""}</span>`;
-  return wrap(row("账号", esc(sy.email), state)
-    + (bar ? `<div class="sync-bar-row">${bar}</div>` : "")
-    + (sy.last_error ? `<div class="mx-error">${esc(sy.last_error)}</div>` : "")
-    + (sessions.length ? row("登录着的设备", "", `<button class="mx-btn mx-btn--text mx-btn--sm" id="sess-open">${sessions.length} 台${ICON.chevR}</button>`) : "")
-    + row("立即同步", sy.uploaded ? `已传 ${numText(sy.uploaded)} 段` : "", `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="sync-now" ${busy ? "disabled" : ""}>立即同步</button>`));
-}
-
-/** 登录着这个账号的设备（小弹层）：这台标出来，别的可以移除（先点「移除」，再点一次确认） */
-function sessionsDialog() {
-  let removing = null;
-  const body = () => {
-    const sessions = (DS.account && DS.account.sessions) || [], me = DS.account && DS.account.session;
-    return `<div class="sess">${sessions.map((x) => `<div class="sess-row"><span>${esc((DS.names || {})[x.device] || x.name || x.device)}${x.id === me ? `<span class="mx-tag">这台</span>` : ""}</span><span class="note">最近 ${mdhm(new Date(x.last_seen).toISOString())}</span>${x.id === me ? "<span></span>" : removing === x.id
-      ? `<span class="btns"><button class="mx-btn mx-btn--text mx-btn--sm" data-sess-keep>取消</button><button class="mx-btn mx-btn--danger mx-btn--sm" data-sess-go="${esc(x.id)}">移除</button></span>`
-      : `<button class="mx-btn mx-btn--text mx-btn--sm" data-sess="${esc(x.id)}">移除</button>`}</div>`).join("")}</div>
-      <p class="note">移除后，那台设备要重新登录才能再同步，它已经传上来的记录还在。</p>`;
-  };
-  const d = openDialog({ title: "登录着这个账号的设备", body: `<div id="sess-body">${body()}</div>`, cancel: "关闭", ok: null,
-    onOpen: (el) => {
-      const draw = () => { el.querySelector("#sess-body").innerHTML = body(); bind(); };
-      const bind = () => {
-        el.querySelectorAll("[data-sess]").forEach((b) => (b.onclick = () => { removing = b.dataset.sess; draw(); }));
-        el.querySelectorAll("[data-sess-keep]").forEach((b) => (b.onclick = () => { removing = null; draw(); }));
-        el.querySelectorAll("[data-sess-go]").forEach((b) => (b.onclick = async () => {
-          try { await call("account_remove_device", { id: b.dataset.sessGo }); DS.account = await call("account_info").catch(() => DS.account); DS.msg = "已移除，那台设备要重新登录"; }
-          catch (x) { DS.err = String(x); }
-          removing = null; draw(); if (S.page === "devices" && !DEV.id) renderDevices();
-        }));
-      };
-      bind();
-    } });
-  return d;
-}
-
-function bindSync() {
-  const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
-  on("ac-login", () => loginDialog("login"));
-  on("ac-signup", () => loginDialog("signup"));
-  on("ac-claim", claimDialog);
-  on("sess-open", sessionsDialog);
-  on("sync-now", async () => { DS.busy = true; DS.err = DS.msg = null; renderDevices(); try { const r = await call("sync_now"); DS.msg = `上传 ${r.uploaded} 段，下载 ${r.downloaded} 段${r.errors.length ? "，有错：" + r.errors.join("；") : ""}`; } catch (x) { DS.err = String(x); } DS.busy = false; renderDevices(); });
-}
-
 // ---------- 设置 ----------
 
 const THEMES = [["", "跟随系统"], ["light", "浅色"], ["dark", "深色"]];
-const SETTING_KEYS = ["gateway", "model_segment", "repo_path", "blocklist", "relay_server"];
+const SETTING_KEYS = ["gateway", "model_segment", "repo_path", "blocklist"];
 const same = (a, b) => JSON.stringify(SETTING_KEYS.map((k) => a[k])) === JSON.stringify(SETTING_KEYS.map((k) => b[k]));
 /** Windows 版：没有钥匙串和系统授权（密钥存数据目录，采集不用授权） */
 const IS_WIN = /Windows/.test(navigator.userAgent);
@@ -2161,118 +2053,6 @@ function bindProjects() {
   $app.querySelectorAll("[data-pj-edit]").forEach((b) => (b.onclick = () => projectDialog(PJ.list.find((p) => p.name === b.closest("[data-p]").dataset.p))));
 }
 
-/** 账号：msg＝页面上留一句结果；confirmLogout＝退出登录等确认。登录、注册、改密码这些都在小弹层里 */
-const AC = { msg: null, confirmLogout: false };
-
-function accountSection(sy) {
-  return section("账号", profileRow() + accountBody(sy));
-}
-
-function accountBody(sy) {
-  const msg = AC.msg ? `<p class="note ac-msg">${esc(AC.msg)}</p>` : "";
-  const row = (name, desc, right) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${desc}</div></div>${right}</div>`;
-  const btn = (id, text) => `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="${id}">${text}</button>`;
-  if (sy.configured && sy.email && !sy.need_login) return row(esc(sy.email), "别的设备用这个邮箱登录",
-      AC.confirmLogout ? `<div class="btns"><button class="mx-btn mx-btn--text mx-btn--sm" id="logout-keep">取消</button><button class="mx-btn mx-btn--danger mx-btn--sm" id="logout-go">退出登录</button></div>` : btn("ac-logout", "退出登录"))
-    + row("主密码", "只在设备上用，不会发给服务器。", btn("ac-password", "改主密码"))
-    + row("恢复码", "忘了主密码时用它重设。", btn("ac-show-code", "查看")) + msg;
-  if (sy.configured && !sy.email) return row("邮箱和主密码", "旧版配对码账号，设好邮箱和主密码就能在别的设备登录", btn("ac-claim", "设好账号")) + msg;
-  return row(sy.need_login ? "登录已失效" : "没登录",
-    sy.need_login ? "登录已失效，重新登录后接着同步" : "登录后，多台设备的记录会同步",
-    `<div class="btns">${sy.need_login ? "" : btn("ac-signup", "注册")}${btn("ac-login", sy.need_login ? "重新登录" : "登录")}</div>`) + msg;
-}
-
-const checkEmail = (e) => {
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw "邮箱格式不对。";
-  // 常见手滑：.con、gmial 这类，邮箱错了以后登录不上
-  if (/\.(con|cmo|cm|comm|om|vom|xom)$/i.test(e) || /@(gmial|gamil|gmai|gmal|gmaill|qq\.con)\b/i.test(e)) throw "邮箱像是拼错了，检查一下";
-  return e;
-};
-const checkPw = (el) => {
-  const a = el.querySelector("#pw1").value, b = el.querySelector("#pw2");
-  if (a.length < 8) throw "主密码至少 8 位。";
-  if (b && b.value !== a) throw "两次输入的主密码不一样。";
-  return a;
-};
-/** 账号变了：登录着的设备列表重取，当前页重画（设置页和设备页都能开这些弹层） */
-const accountChanged = () => { DS.account = null; return S.page === "devices" ? renderDevices() : renderSettings(); };
-
-/** 登录、注册、用恢复码重设（小弹层，底下可以互相切换） */
-function loginDialog(mode = "login", email = "") {
-  const sy = S.sync || {};
-  const em = dlgField("em", "邮箱", { ph: "you@example.com", value: email || sy.email || "" });
-  const pw2 = dlgField("pw2", "再输一次", { type: "password" });
-  const forms = {
-    login: ["登录", em + dlgField("pw1", "主密码", { type: "password" }), "登录", "登录中…"],
-    signup: ["注册", em + dlgField("pw1", "主密码", { type: "password", ph: "至少 8 位，记得住又别人猜不到" }) + pw2 + dlgField("inv", "邀请码", { type: "password", ph: "现在注册要邀请码" }), "注册并登录", "注册中…"],
-    recover: ["用恢复码重设主密码", em + dlgField("rc", "恢复码", { ph: "XXXX-XXXX-…", mono: true }) + dlgField("pw1", "新主密码", { type: "password", ph: "至少 8 位" }) + pw2, "重设并登录", "重设中…"],
-  };
-  const links = { login: [["signup", "没有账号？注册"], ["recover", "忘了主密码"]], signup: [["login", "已经有账号？登录"]], recover: [["login", "想起来了？登录"]] }[mode];
-  const [title, body, ok, busy] = forms[mode];
-  openDialog({
-    title, ok, busy,
-    body: (mode === "recover" ? `<p class="note">重设后，其他设备要重新登录</p>` : `<p class="note">记录在本机加密后再同步，服务器读不到内容</p>`) + body
-      + `<div class="dlg-links">${links.map(([k, v]) => `<button class="mx-btn mx-btn--text mx-btn--sm" data-to="${k}">${v}</button>`).join("")}</div>`,
-    onOpen: (el) => el.querySelectorAll("[data-to]").forEach((b) => (b.onclick = () => loginDialog(b.dataset.to, dlgVal(el, "em")))),
-    submit: async (el) => {
-      const email = checkEmail(dlgVal(el, "em"));
-      AC.msg = null;
-      if (mode === "login") await call("account_login", { email, password: el.querySelector("#pw1").value });
-      else if (mode === "signup") { const code = await call("account_signup", { invite: dlgVal(el, "inv"), email, password: checkPw(el) }); setTimeout(() => codeDialog(code, true)); }
-      else { await call("account_recover", { email, code: dlgVal(el, "rc"), password: checkPw(el) }); AC.msg = "已重设，其他设备要重新登录"; }
-      accountChanged();
-    },
-  });
-}
-
-/** 早期配对码账号设邮箱和主密码 */
-function claimDialog() {
-  openDialog({
-    title: "设邮箱和主密码", ok: "设好账号", busy: "设置中…",
-    body: `<p class="note">设好后，别的设备用邮箱和主密码登录</p>`
-      + dlgField("em", "邮箱", { ph: "you@example.com" }) + dlgField("pw1", "主密码", { type: "password", ph: "至少 8 位，记得住又别人猜不到" }) + dlgField("pw2", "再输一次", { type: "password" }),
-    submit: async (el) => {
-      const email = checkEmail(dlgVal(el, "em")), code = await call("account_claim", { email, password: checkPw(el) });
-      AC.msg = null; accountChanged(); setTimeout(() => codeDialog(code, true));
-    },
-  });
-}
-
-function passwordDialog() {
-  openDialog({
-    title: "改主密码", ok: "改主密码", busy: "改密码中…",
-    body: `<p class="note">以后登录新设备用新主密码</p>`
-      + dlgField("pw1", "新主密码", { type: "password", ph: "至少 8 位" }) + dlgField("pw2", "再输一次", { type: "password" }),
-    submit: async (el) => { await call("account_password", { password: checkPw(el) }); AC.msg = "主密码已改。"; renderSettings(); },
-  });
-}
-
-/** 恢复码。fresh＝刚注册或刚设好账号：必须点「我已存好」才关 */
-function codeDialog(code, fresh) {
-  openDialog({
-    title: fresh ? "存好恢复码" : "恢复码", closable: !fresh, cancel: fresh ? false : "关闭", ok: fresh ? "我已存好" : "复制恢复码",
-    body: `<div class="code-box"><code class="mono">${esc(code)}</code>${fresh ? `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="copy-rc" autofocus>复制</button>` : ""}</div>
-      <p class="note warn-text">恢复码是忘了主密码时找回数据的唯一办法：存进密码管理器或抄在纸上。主密码和恢复码都丢了，云端的数据就再也解不开，我们也帮不了。</p>`,
-    onOpen: (el, d) => {
-      const b = el.querySelector("#copy-rc");
-      if (b) b.onclick = async () => { try { await navigator.clipboard.writeText(code); b.textContent = "已复制"; } catch (x) { d.setErr("复制不了，手动选中复制。"); } };
-    },
-    submit: async () => { if (!fresh) { try { await navigator.clipboard.writeText(code); } catch (x) { throw "复制不了，手动选中复制。"; } } },
-  });
-}
-
-function bindAccount() {
-  const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
-  on("ac-login", () => loginDialog("login"));
-  on("ac-signup", () => loginDialog("signup"));
-  on("ac-claim", claimDialog);
-  on("ac-password", passwordDialog);
-  on("ac-show-code", async () => { try { codeDialog(await call("account_recovery_code"), false); } catch (x) { AC.msg = `取不到恢复码：${x}`; renderSettings(); } });
-  on("ac-logout", () => { AC.confirmLogout = true; renderSettings(); });
-  on("logout-keep", () => { AC.confirmLogout = false; renderSettings(); });
-  on("logout-go", async () => { await call("account_logout"); AC.confirmLogout = false; AC.msg = null; DS.account = null; renderSettings(); });
-}
-
 /** 到明早 8 点还有几分钟 */
 function minutesToMorning() {
   const now = new Date(), t = new Date(now);
@@ -2312,36 +2092,11 @@ async function labelDialog(i) {
 
 /** 添加一个常去的地方：搜高德（以第一个常去的地方为中心，按距离），挑一个就加上，名字先用店名，之后可以改 */
 function addPlaceDialog() {
-  const c = PL.labels[0];
-  let found = [];
-  openDialog({
-    title: "添加一个地方", cancel: "关闭",
-    body: `<div class="mx-field"><label for="pa-q">搜小区、楼栋、店名、公司</label><input class="mx-input" id="pa-q" autocomplete="off"><div class="pick-list" id="pa-list"></div></div>`,
-    onOpen: (el, d) => {
-      let timer = null;
-      el.querySelector("#pa-q").oninput = (e) => {
-        clearTimeout(timer);
-        const q = e.target.value.trim(), box = el.querySelector("#pa-list");
-        if (!q) { box.innerHTML = ""; return; }
-        timer = setTimeout(async () => {
-          try { found = await call("amap_search", { text: q, lat: c ? c.lat : null, lon: c ? c.lon : null }); }
-          catch (x) { box.innerHTML = `<p class="note">${esc(String(x))}</p>`; return; }
-          if (el.querySelector("#pa-q").value.trim() !== q) return;
-          box.innerHTML = found.slice(0, 8).map((p, i) => `<button class="pick-row" data-add="${i}"><span class="pk-n">${esc(p.name)}<span class="pk-t">${esc((p.type || "").split(";")[1] || "")}</span></span><span class="pk-r mono">${c && p.distance != null ? (p.distance < 1000 ? Math.round(p.distance) + " 米" : (p.distance / 1000).toFixed(1) + " 公里") : ""}</span></button>`).join("") || `<p class="note">没搜到。</p>`;
-        }, 350);
-      };
-      el.addEventListener("click", async (e) => {
-        const b = e.target.closest("[data-add]"); if (!b) return;
-        const p = found[+b.dataset.add];
-        try { await call("set_place_label", { lat: p.lat, lon: p.lon, label: shopShort(p.name), kind: "other" }); closeDialog(); afterPlaces(); }
-        catch (x) { d.setErr(`没加上：${x}`); }
-      });
-    },
-  });
+  openDialog({title:"添加本地地点",ok:"保存",body:dlgField("place-label","名称",{ph:"例如：家"})+dlgField("place-lat","纬度",{mono:true})+dlgField("place-lon","经度",{mono:true}),submit:async el=>{const label=dlgVal(el,"place-label"),lat=Number(dlgVal(el,"place-lat")),lon=Number(dlgVal(el,"place-lon"));if(!label||!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180)throw "请填写名称和有效经纬度。";await call("set_place_label",{lat,lon,label,kind:"other"});afterPlaces();}});
 }
 
-/** 设置分六页，放在页头的页签里：通用｜账号｜记录｜连接｜数据｜项目。改了就存，不再有「保存设置」；要填几项的（地址、模型、密钥）开小弹层 */
-const SET_TABS = [["general", "通用"], ["account", "账号"], ["record", "记录"], ["connect", "连接"], ["data", "数据"], ["projects", "项目"]];
+/** 设置页：通用｜记录｜连接｜数据｜项目。改了就存，不再有「保存设置」；要填几项的（地址、模型、密钥）开小弹层 */
+const SET_TABS = [["general", "通用"], ["record", "记录"], ["connect", "连接"], ["data", "数据"], ["projects", "项目"]];
 try { SS.tab = localStorage.getItem("settings-tab") || "general"; } catch (e) { SS.tab = "general"; }
 const hostOf = (u) => { try { return new URL(u).host; } catch (e) { return u || ""; } };
 const setRow = (name, desc, right) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div>${desc ? `<div class="mx-setting-desc">${desc}</div>` : ""}</div>${right}</div>`;
@@ -2360,12 +2115,9 @@ async function renderSettings() {
   // 手机版不采集：没有「记录」页（暂停、不记录的 app、删最近记录都是电脑上的事）
   const tabsHere = S.status && S.status.mobile ? SET_TABS.filter(([k]) => k !== "record") : SET_TABS;
   const tab = tabsHere.some(([k]) => k === SS.tab) ? SS.tab : "general";
-  const sy = await call("sync_status").catch(() => ({}));
-  S.sync = sy;
   if (tab === "projects") PJ.list = PJ.list || await call("list_projects").catch(() => []);
   S.profile = await call("get_profile").catch(() => S.profile);
   S.status = await call("get_status");
-  if (TAURI) S.update = await call("update_status").catch(() => S.update);
   renderSide();
   const st = S.status, cf = S.settings;
   const theme = document.documentElement.dataset.theme || "";
@@ -2376,12 +2128,9 @@ async function renderSettings() {
   if (tab === "general") {
     const mobile = !!st.mobile;
     body = section("个人资料", profileRow())
-      + (mobile ? phoneSection() : "")
       + section("通用", (mobile ? "" : setRow("开机自动启动", "登录电脑后自动开始记录。", `<button class="mx-switch" role="switch" id="login" aria-checked="${!!st.login_item}" aria-label="开机自动启动"></button>`))
         + setRow("主题", "", `<div class="mx-seg" role="tablist" id="theme">${THEMES.map(([k, v]) => `<button role="tab" aria-selected="${k === theme}" class="${k === theme ? "is-on" : ""}" data-theme="${k}">${v}</button>`).join("")}</div>`))
-      + (mobile ? section("关于", setRow(`版本 ${esc(st.version || "")}`, "手机版跟着 TestFlight 更新。", "")) : aboutSection());
-  } else if (tab === "account") {
-    body = sy.shadow ? section("账号", emptyInline("测试版不登录账号")) : section("账号与同步", accountBody(sy));
+      + aboutSection();
   } else if (tab === "record") {
     const pause = st.paused
       ? setRow("已暂停", st.paused_until ? `到 ${hm(st.paused_until)} 自动继续。` : "一直暂停，点继续才恢复。", `<button class="mx-btn mx-btn--primary mx-btn--sm" data-pause="off">继续记录</button>`)
@@ -2395,29 +2144,9 @@ async function renderSettings() {
     body = section("记录", pause + block) + section("隐私", del);
   } else if (tab === "connect") {
     const ks = cf.api_key_source;
-    const amap = cf.has_amap_key && cf.has_amap_js ? pill(true, "已存") : cf.has_amap_key ? pill(false, "缺地图 Key") : pill(false, "还没有");
-    const syncLocked = sy.configured && !sy.shadow;
-    const L = SS.llm || {};
-    const official = cf.model_mode === "official", asrOfficial = cf.transcribe_server === cf.default_transcribe_server, mapOfficial = cf.map_mode === "official";
-    const planPill = L.error ? pill(false, "没登录账号") : L.plan === "official" ? pill(true, "已开通") : L.plan === "stopped" ? pill(false, "已停用") : SS.llm ? pill(false, "没开通") : "";
-    // 三项本月用量：用了多少 / 上限，进度条；这一项改成自己的就写「用的是自己的」
-    const useRow = (name, u, using, fmt) => {
-      const used = (u && u.used) || 0, q = (u && u.quota) || 0;
-      const pct = q ? Math.min(100, Math.round(used / q * 100)) : 0;
-      return setRow(name, `${fmt(used)} / ${q ? fmt(q) : "不限"}${using ? "" : " · 这一项用的是自己的"}<div class="usebar"><i style="width:${pct}%"${pct >= 90 ? ' class="hot"' : ""}></i></div>`, `<span class="note mono">${q ? pct + "%" : ""}</span>`);
-    };
-    const tokens = (n) => (n >= 1e4 ? `${numText(Math.round(n / 1e4))} 万 token` : `${numText(n)} token`);
-    const minutes = (sec) => `${numText(Math.round(sec / 60))} 分钟`;
-    const calls = (n) => `${numText(n)} 次`;
-    body = section("官方服务", setRow("这个账号", L.plan === "official" ? "模型、转写、地图都用官方的，不用填 Key" : L.plan === "stopped" ? "已停用，联系管理员" : L.error ? "登录后才能用" : "还没开通，联系管理员", planPill)
-        + (L.plan === "official" ? useRow("模型", L.llm, official, tokens) + useRow("转写", L.asr, asrOfficial, minutes) + useRow("地图", L.map, mapOfficial, calls) : ""))
-      + section("每一项", (official
-      ? setRow("模型", "官方", smallBtn("c-model", "设置"))
-      : setRow("模型", `自己的网关 · <span class="mono">${esc(hostOf(cf.gateway))} · ${esc(cf.model_segment || "没填模型")}</span>`, `${pill(!!ks, ks ? "密钥已存" : "没有密钥")}${smallBtn("c-model", "设置")}`))
-      + setRow("转写服务", `${asrOfficial ? "官方" : `自建 · <span class="mono">${esc(hostOf(cf.transcribe_server))}</span>`} · 你叫「${esc(cf.speaker_name)}」${st.cloud_sync ? `<br>${esc(st.cloud_sync)}` : ""}`, smallBtn("c-asr", "设置"))
-      + setRow("高德地图", mapOfficial ? "官方" : "自己的 Key", `${mapOfficial ? "" : amap}${smallBtn("c-amap", "设置")}`)
-      + setRow("同步服务器", `<span class="mono">${esc(hostOf(cf.sync_server))}</span>${cf.sync_server === cf.default_sync_server ? " · 官方" : " · 自建"}`, smallBtn("c-sync", "更改", syncLocked ? `disabled title="登录着不能换，先在「账号」里退出"` : ""))
-      );
+    body = section("模型服务", setRow("自主配置 AI", `<span class="mono">${esc(hostOf(cf.gateway) || "未设置 Base URL")} · ${esc(cf.model_segment || "未设置模型")}</span>`, `${pill(!!ks, ks ? "密钥已存" : "没有密钥")}${smallBtn("c-model", "设置")}`)
+      + setRow("定时 AI 分析", "开启后，定时摘要与日总结会把所需记录发送给你配置的模型服务。关闭时仍可手动生成。", `<button class="mx-switch" role="switch" id="ai-enabled" aria-checked="${!!cf.ai_enabled}" aria-label="定时 AI 分析"></button>`))
+      + (cf.legacy_model_disabled ? `<p class="note">原平台模型已停用。旧 Base URL、模型名与密钥均保留，请确认独立模型服务配置后再使用。</p>` : "");
   } else if (tab === "data") {
     body = SS.storage ? storageView(SS.storage) : `<div class="form">${emptyInline("在看数据存在哪……")}</div>`;
   } else {
@@ -2432,8 +2161,7 @@ async function renderSettings() {
   };
   const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
   if (tab === "general") {
-    bindProfile(); if (!st.mobile) bindAbout();
-    if (st.mobile) bindPhone();
+    bindProfile();
     document.getElementById("theme").onclick = (e) => {
       const b = e.target.closest("button"); if (!b) return;
       const t = b.dataset.theme;
@@ -2443,7 +2171,6 @@ async function renderSettings() {
     };
     on("login", async () => { try { await call("set_login_item", { on: !st.login_item }); } catch (x) { alert(`没改成：${x}`); } renderSettings(); });
   }
-  if (tab === "account" && !sy.shadow) bindAccount();
   if (tab === "projects") bindProjects();
   if (tab === "record") {
     $app.querySelectorAll("[data-pause]").forEach((b) => (b.onclick = async () => {
@@ -2478,6 +2205,8 @@ async function renderSettings() {
     if (!SS.storage || Date.now() - (SS.storage.at || 0) > 60e3) load();
     SS.storageTimer = setInterval(load, 60e3);
     on("open-dir", () => call("open_data_dir"));
+    on("local-export", () => localArchiveDialog("export"));
+    on("local-import", () => localArchiveDialog("import"));
     on("repo-edit", () => openDialog({
       title: "人生记录仓库", ok: "保存",
       body: dlgField("repo", "路径", { value: cf.repo_path || "", mono: true, ph: "~/人生记录", help: "日数据包和日总结的文件夹" }),
@@ -2485,167 +2214,242 @@ async function renderSettings() {
     }));
   }
   if (tab === "connect") {
-    if (!SS.llmLoading && (!SS.llm || Date.now() - SS.llmAt > 60e3)) {
-      SS.llmLoading = true;
-      call("llm_status").then((v) => { SS.llm = v; SS.llmAt = Date.now(); }).catch((x) => { SS.llm = { error: String(x) }; })
-        .finally(() => { SS.llmLoading = false; if (S.page === "settings" && SS.tab === "connect" && !document.querySelector(".dlg-root")) renderSettings(); });
-    }
     on("c-model", modelDialog);
-    on("c-asr", asrDialog);
-    on("c-amap", amapDialog);
-    on("c-sync", syncServerDialog);
+    on("ai-enabled", async () => { await saveSome({ ai_enabled: !cf.ai_enabled }); renderSettings(); });
   }
-}
 
-/** 手机版设置「通用」里的「这台手机」：定位、手表、用这台 iPhone 录、本人声纹、上传进度（原生做的，经 native_ 命令） */
-function phoneSection() {
-  const n = SS.native;
-  if (!n) return section("这台手机", emptyInline("在看这台手机的状态……"));
-  if (n.error) return section("这台手机", `<div class="mx-field-error">${esc(n.error)}</div>`);
-  const loc = { always: [true, "始终允许"], when_in_use: [false, "只在使用时"], denied: [false, "没允许"], not_determined: [false, "还没问过"] }[n.location] || [false, n.location];
-  const ago = (iso) => (iso ? mdhm(iso) : "还没有");
-  return section("这台手机",
-    setRow("位置", loc[0] ? (n.precise ? "记停留点用" : "「精确位置」关着，停留点会不准") : "改成「始终」才能记停留点", `${pill(loc[0] && n.precise, loc[1])}${loc[0] && n.precise ? "" : smallBtn("ph-settings", "去设置")}`)
-    + setRow("手表", n.watch_recording ? `在录${n.watch_updated ? ` · ${ago(n.watch_updated)} 收到状态` : ""}` : `没在录${n.watch_updated ? ` · ${ago(n.watch_updated)} 收到状态` : ""}`, pill(!!n.watch_recording, n.watch_recording ? "在录" : "没在录"))
-    + setRow("用这台 iPhone 录", n.phone_recording ? `在录，${ago(n.phone_since)} 开始` : "没戴手表时用", `<button class="mx-switch" role="switch" id="ph-rec" aria-checked="${!!n.phone_recording}" aria-label="用这台 iPhone 录"></button>`)
-    + setRow("本人声纹", "用来认出哪些话是你说的", smallBtn("ph-voice", "录一段", n.logged_in ? "" : "disabled"))
-    + setRow("上传", `${n.pending ? `还有 ${n.pending} 段录音` : "录音都传完了"}${n.pending_place_days ? `、${n.pending_place_days} 天停留点` : ""}没传 · 最近 ${ago(n.last_upload)}${n.last_error ? `<br>${esc(n.last_error)}` : ""}${n.logged_in ? "" : "<br>登录账号后开始上传。"}`, smallBtn("ph-up", "现在传")));
-}
-
-function bindPhone() {
-  const load = async () => {
-    try { SS.native = await call("native_status"); } catch (x) { SS.native = { error: String(x) }; }
-    if (S.page === "settings" && SS.tab === "general" && !document.querySelector(".dlg-root")) renderSettings();
-  };
-  if (!SS.nativeAt || Date.now() - SS.nativeAt > 5e3) { SS.nativeAt = Date.now(); load(); }
-  const act = (name) => call("native_action", { name }).then(() => setTimeout(() => { SS.nativeAt = 0; renderSettings(); }, 800)).catch((x) => alert(String(x)));
-  const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
-  on("ph-settings", () => act("open_settings"));
-  on("ph-rec", () => act(SS.native && SS.native.phone_recording ? "record_stop" : "record_start"));
-  on("ph-voice", () => act("voiceprint"));
-  on("ph-up", () => act("upload_now"));
 }
 
 /** 「数据」页：本机、Cloudflare、转写服务三处各存了什么、多大、留多久（方案见 报告/方案_20261021_录音与存储.md）；开着时每分钟刷新 */
 function storageView(d) {
   if (d.error) return section("数据", `<div class="mx-field-error">${esc(d.error)}</div>`);
   const table = (rows, cols) => `<table class="mx-table store"><thead><tr>${cols.map((c) => `<th${c[2] ? ' class="num"' : ""}>${c[0]}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${cols.map((c) => `<td${c[2] ? ' class="num mono"' : ""}>${c[1](r)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
-  const L = d.local, C = d.cloud, T = d.transcribe;
+  const L = d.local;
   const local = section("本机", setRow("数据目录", `<span class="mono">${esc((L.path || "").replace(/^\/Users\/[^/]+/, "~"))}</span> · 共 ${bytesText(L.total)}`, (S.status && S.status.mobile ? "" : smallBtn("open-dir", "在访达中打开")))
     + table(L.items, [["内容", (r) => esc(r.name)], ["大小", (r) => bytesText(r.bytes), 1], ["留多久", (r) => esc(r.keep)]]), { aside: "全部数据，以这里为准" });
-  const cloud = section("Cloudflare（同步）", C.error ? emptyInline(C.error)
-    : `<p class="note" style="margin:0 0 var(--space-3)"><span class="mono">${esc(hostOf(C.server))}</span> · 共 ${bytesText(C.total)}</p>`
-      + table(C.items, [["内容", (r) => esc(r.name)], ["块数", (r) => numText(r.count), 1], ["大小", (r) => bytesText(r.bytes), 1], ["留多久", (r) => esc(r.keep)]]));
-  const jobs = T.jobs ? Object.entries(T.jobs).map(([k, n]) => `${{ queued: "排队", running: "在转", done: "转好待取", failed: "失败" }[k] || k} ${n}`).join("、") : "";
-  const asr = section("转写服务", T.error ? `<p class="note" style="margin:0"><span class="mono">${esc(hostOf(T.server))}</span></p>${emptyInline(T.error)}`
-    : setRow(`<span class="mono">${esc(hostOf(T.server))}</span>`, `${jobs || "没有你的任务"} · 占 ${bytesText(T.bytes)}`, `<span class="note">${esc(T.keep)}</span>`));
   const repo = section("人生记录仓库", setRow(d.repo ? `<span class="mono">${esc((d.repo.path || "").replace(/^\/Users\/[^/]+/, "~"))}</span>` : "没填",
     d.repo ? `raw/ 共 ${bytesText(d.repo.bytes)} · ${esc(d.repo.keep)}` : "日数据包和日总结的文件夹", smallBtn("repo-edit", "更改")));
-  return local + cloud + asr + repo + `<p class="note">${d.at ? `${hm(new Date(d.at).toISOString())} 取的，开着这一页每分钟更新。` : ""}</p>`;
+  return local + section("本地导入导出", setRow("数据归档", "手动保存到本机。导出不含 API Key、账户凭据和旧云端令牌；导入合并记录，不覆盖同名文件。", `<div class="btns">${smallBtn("local-export", "导出")}${smallBtn("local-import", "导入")}</div>`)) + repo + `<p class="note">${d.at ? `${hm(new Date(d.at).toISOString())} 取的，开着这一页每分钟更新。` : ""}</p>`;
 }
 
-/** 模型：官方（按账号开通，经同步服务代调，不用填密钥）或自己的网关（地址、模型、密钥；地址和模型有默认值，密钥不预填） */
+function localArchiveDialog(action) {
+  const exp=action==="export";
+  if(!TAURI){openDialog({title:"本地归档",body:'<p>请在桌面应用中使用本地导入导出。</p>',cancel:"关闭"});return;}
+  openDialog({title:exp?"导出本地数据":"导入本地数据",ok:exp?"保存归档":"导入归档",busy:"处理中…",body:dlgField("archive-path",exp?"保存文件的完整路径":"归档文件的完整路径",{mono:true,ph:exp?"~/Desktop/timeseen-2026-11-09.tar":"~/Desktop/timeseen-data.tar",help:exp?"文件保存在本机，不包含 API Key 和旧云端账户凭据。":"同名记录不覆盖，现有 AI 配置保持；导入配置另存到 imports。"}),submit:async el=>{const path=dlgVal(el,"archive-path");if(!path)throw "请填写完整路径。";const result=await call(exp?"export_local_data":"import_local_data",{path});SS.storage=null;S.todos=S.memos=null;setTimeout(()=>openDialog({title:exp?"已导出":"已导入",body:`<p>${exp?esc(result.path):`新增 ${result.imported} 个文件，跳过 ${result.skipped} 个同名文件。`}</p>${result.note?`<p class="note">${esc(result.note)}</p>`:""}`,cancel:"关闭"}),0);}});
+}
+
+function modelGatewayAddress(value) {
+  const address = value.trim().replace(/\/+$/, "").replace(/\/(chat\/completions|responses|models)$/, "");
+  let url;
+  try { url = new URL(address); } catch { throw "请输入完整的 http:// 或 https:// 网关地址。"; }
+  if (!["http:", "https:"].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) {
+    throw "网关地址需包含 http:// 或 https://，密钥请填写在密钥栏。";
+  }
+  if (url.hostname.toLowerCase().replace(/\.$/,"")==="beayy.com" || url.hostname.toLowerCase().replace(/\.$/,"").endsWith(".beayy.com")) throw "原平台服务已移除，请填写独立模型服务地址。";
+  return address;
+}
+
+function modelClientHtml(settings) {
+  return `<div class="mx-field"><label for="model-client">客户端兼容</label>
+    <select id="model-client" class="mx-input"><option value="timeseen" ${settings.model_client !== "codex" ? "selected" : ""}>TimeSeen（默认）</option><option value="codex" ${settings.model_client === "codex" ? "selected" : ""}>Codex 兼容</option></select>
+    <p class="note">Codex 兼容会发送 Codex 风格客户端标识，并保留 TimeSeen 来源；适用于你有权接入的网关，不增加模型权限。</p></div>
+    <div class="mx-field"><label for="model-protocol">请求协议</label>
+    <select id="model-protocol" class="mx-input"><option value="chat" ${settings.model_protocol !== "responses" ? "selected" : ""}>Chat Completions</option><option value="responses" ${settings.model_protocol === "responses" ? "selected" : ""}>Responses（Codex 常用）</option></select>
+    <p class="note">列表获取、模型测试、摘要与日总结使用同一套配置；Codex 网关通常需要 Responses。</p></div>`;
+}
+
+function modelPickerHtml() {
+  return `<div class="model-list" data-model-picker>
+    <div class="model-list-head"><span>模型</span><span data-mp="count"></span></div>
+    <div class="btns model-actions"><button type="button" class="mx-btn mx-btn--primary mx-btn--sm" data-mp="fetch">拉取全部模型</button><button type="button" class="mx-btn mx-btn--secondary mx-btn--sm" data-mp="test">测试已选</button><button type="button" class="mx-btn mx-btn--text mx-btn--sm" data-mp="stop" hidden>停止测试</button></div>
+    <div class="model-selection-tools"><div class="mx-seg" role="tablist" aria-label="模型筛选">${[["all", "全部模型"], ["selected", "已选模型"], ["working", "测试可用"]].map(([value, label]) => `<button type="button" role="tab" data-mp-filter="${value}">${label}</button>`).join("")}</div><div class="btns"><button type="button" class="mx-btn mx-btn--text mx-btn--sm" data-mp="select-all">全选</button><button type="button" class="mx-btn mx-btn--text mx-btn--sm" data-mp="select-none">清空</button></div></div>
+    <input class="mx-input" type="search" data-mp="search" aria-label="搜索模型" placeholder="搜索模型 ID…" autocomplete="off">
+    <div class="model-chips" data-mp="chips" aria-label="可选模型"></div>
+    <div class="inline model-add"><input class="mx-input mono" data-mp="new" aria-label="手动添加模型 ID" placeholder="手动添加模型 ID，多个用逗号分隔" autocomplete="off"><button type="button" class="mx-btn mx-btn--secondary" data-mp="add">添加模型</button></div>
+    <p class="note model-current">已选 <b data-mp="selected-count"></b> 个模型 · 当前使用：<span class="mono" data-mp="current"></span></p>
+    <p class="note">点击模型可多选，再次点击取消；点击「设为主用」切换摘要模型。测试会发送少量请求并消耗网关额度。</p>
+    <p class="note model-feedback" data-mp="status" role="status" aria-live="polite"></p>
+  </div>`;
+}
+
+function bindModelPicker(root, { getConnection, getModel, setModel, getSelected, setSelected }) {
+  const box = root.querySelector("[data-model-picker]");
+  const field = (name) => box.querySelector(`[data-mp="${name}"]`);
+  let selected = new Set([...getSelected(), getModel()].filter(Boolean));
+  let models = new Set(selected), manual = new Set();
+  let tests = new Map(), filter = "all", fetched = false, fetching = false, revision = 0, run = null;
+  let testPending = 0;
+  const sorted = (ids) => [...ids].sort((first, second) => first.localeCompare(second));
+  const choose = (ids) => { selected = new Set([...ids, getModel()].filter((id) => id && models.has(id))); setSelected(sorted(selected)); };
+  const chooseOne = (id) => { if (!selected.has(id)) { selected.add(id); setSelected(sorted(selected)); } setModel(id); };
+  const visible = () => {
+    const query = field("search").value.trim().toLowerCase();
+    return sorted([...models].filter((id) => (!query || id.toLowerCase().includes(query))
+      && (filter !== "selected" || selected.has(id)) && (filter !== "working" || tests.get(id)?.ok)));
+  };
+  const feedback = (text, error = false) => {
+    field("status").textContent = text;
+    field("status").classList.toggle("model-feedback-error", error);
+  };
+  const draw = () => {
+    const ids = visible(), current = getModel();
+    field("count").textContent = `${ids.length} / ${models.size} 个`;
+    field("current").textContent = current || "尚未选择";
+    field("selected-count").textContent = selected.size;
+    box.querySelectorAll("[data-mp-filter]").forEach((button) => {
+      const active = button.dataset.mpFilter === filter;
+      button.classList.toggle("is-on", active); button.setAttribute("aria-selected", String(active));
+    });
+    const chips = field("chips"), scroll = chips.scrollTop;
+    chips.innerHTML = ids.map((id) => {
+      const result = tests.get(id), pending = tests.has(id) && result === null;
+      const status = pending ? "测试中…" : result ? result.ok ? `${result.ms} ms` : "失败" : "";
+      const title = pending ? "正在请求此模型" : result ? result.ok ? `可用 · ${result.ms} ms` : result.error : selected.has(id) ? "点击取消选择" : "点击选择此模型";
+      return `<span class="model-entry"><button type="button" class="model-chip${selected.has(id) ? " selected" : ""}${id === current ? " primary" : ""}${pending ? " pending" : result ? result.ok ? " ok" : " bad" : ""}" data-model="${esc(id)}" aria-pressed="${selected.has(id)}" title="${esc(title)}">${selected.has(id) ? ICON.check : ""}<span>${esc(id)}</span>${id === current ? '<em>主用</em>' : ""}${result?.ok ? '<i class="dot" aria-hidden="true"></i>' : ""}${status ? `<b>${esc(status)}</b>` : ""}</button><button type="button" class="model-test-one" data-primary-model="${esc(id)}" ${id === current ? "disabled" : ""}>设为主用</button><button type="button" class="model-test-one" data-test-model="${esc(id)}" aria-label="${esc(`测试 ${id}`)}" ${run || fetching || testPending ? "disabled" : ""}>测试</button></span>`;
+    }).join("") || `<p class="note">${filter === "working" ? "还没有测试成功的模型。" : models.size ? "没有符合条件的模型。" : "填写地址和密钥，获取全部模型，或手动添加模型 ID。"}</p>`;
+    chips.scrollTop = scroll;
+    field("fetch").disabled = fetching || !!run || !!testPending;
+    field("fetch").textContent = fetching ? "拉取中…" : fetched ? "重新拉取全部模型" : "拉取全部模型";
+    field("test").disabled = !selected.size || fetching || !!run || !!testPending;
+    field("select-all").disabled = !ids.length || fetching || !!run;
+    field("select-none").disabled = !selected.size || fetching || !!run;
+    field("stop").hidden = !run;
+    field("stop").disabled = !!run?.stopped;
+    field("stop").textContent = run?.stopped ? "等待当前请求结束…" : "停止测试";
+    field("add").disabled = !field("new").value.trim();
+  };
+  const add = () => {
+    const ids = [...new Set(field("new").value.split(/[,\n]/).map((id) => id.trim()).filter(Boolean))];
+    if (!ids.length) return;
+    for (const id of ids) { models.add(id); manual.add(id); selected.add(id); }
+    choose(selected); setModel(ids[0]); field("new").value = ""; field("search").value = ""; filter = "all";
+    feedback(`已添加并选择 ${ids.length} 个模型，当前使用 ${ids[0]}`); draw();
+  };
+  const reset = () => {
+    revision++;
+    if (run) run.stopped = true;
+    run = null; fetching = false; fetched = false; tests = new Map(); manual = new Set();
+    selected = new Set([...getSelected(), getModel()].filter(Boolean)); models = new Set(selected); filter = "all"; field("search").value = "";
+    feedback("地址或密钥已更改，请重新获取列表或测试。"); draw();
+  };
+  field("fetch").onclick = async () => {
+    if (run || fetching || testPending) return;
+    const generation = ++revision, connection = getConnection();
+    fetching = true; feedback("正在获取供应商的全部模型…"); draw();
+    try {
+      const ids = await call("list_models", connection);
+      if (generation !== revision || !box.isConnected) return;
+      models = new Set([...ids, ...manual, ...selected]); fetched = true; filter = "all";
+      feedback(ids.length ? `已拉取 ${ids.length} 个模型。可全选或点击指定模型，再测试已选。` : "供应商返回空列表，可以手动添加模型 ID。");
+    } catch (error) {
+      if (generation === revision) feedback(`获取失败：${String(error)}`, true);
+    } finally {
+      if (generation === revision) { fetching = false; draw(); }
+    }
+  };
+  const test = async (ids) => {
+    if (run || fetching || testPending || !ids.length) return;
+    const task = { stopped: false }, generation = revision, connection = getConnection();
+    run = task;
+    let next = 0, finished = 0, succeeded = 0, lastError = "";
+    const active = () => generation === revision && box.isConnected && !task.stopped;
+    const progress = () => feedback(`已测试 ${finished}/${ids.length} 个 · 可用 ${succeeded} 个${lastError ? ` · ${lastError}` : ""}`);
+    const worker = async () => {
+      while (active() && next < ids.length) {
+        const id = ids[next++]; tests.set(id, null); draw();
+        let result;
+        testPending++;
+        try {
+          const results = await call("test_models", { ...connection, models: [id] });
+          result = results.find((value) => value.model === id) || { model: id, ok: false, error: "未收到模型测试结果" };
+        } catch (error) { result = { model: id, ok: false, error: String(error) }; }
+        finally { testPending--; }
+        if (generation !== revision || !box.isConnected) { if (box.isConnected) draw(); return; }
+        tests.set(id, result); finished++; if (result.ok) succeeded++; else lastError = `${id}：${result.error}`;
+        progress(); draw();
+      }
+    };
+    feedback(`开始测试 ${ids.length} 个模型…`); draw();
+    await Promise.all(Array.from({ length: Math.min(3, ids.length) }, worker));
+    if (generation !== revision || !box.isConnected) return;
+    run = null;
+    if (task.stopped) feedback(`已停止后续测试 · 完成 ${finished}/${ids.length} 个 · 可用 ${succeeded} 个`);
+    else progress();
+    draw();
+  };
+  field("test").onclick = () => test(sorted(selected));
+  field("select-all").onclick = () => { const ids = field("search").value.trim() ? visible() : [...selected, ...visible()]; choose(ids); feedback(`已选择 ${selected.size} 个模型，点击「测试已选」检查可用性。`); draw(); };
+  field("select-none").onclick = () => { choose([]); feedback("已清空其他选择，保留当前主用模型；重新点击模型可设为主用。"); draw(); };
+  field("stop").onclick = () => {
+    if (run) run.stopped = true;
+    feedback("已停止发送新测试，正在执行的请求结束后显示结果（单次最多 30 秒）。"); draw();
+  };
+  field("search").oninput = draw;
+  field("search").onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); } };
+  field("new").oninput = draw;
+  field("new").onkeydown = (event) => {
+    if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); event.stopPropagation(); add(); }
+  };
+  field("add").onclick = add;
+  box.onclick = (event) => {
+    const filterButton = event.target.closest("[data-mp-filter]");
+    if (filterButton) { filter = filterButton.dataset.mpFilter; draw(); return; }
+    const testButton = event.target.closest("[data-test-model]");
+    if (testButton) { test([testButton.dataset.testModel]); return; }
+    const primaryButton = event.target.closest("[data-primary-model]");
+    if (primaryButton) { chooseOne(primaryButton.dataset.primaryModel); draw(); return; }
+    const modelButton = event.target.closest("[data-model]");
+    if (modelButton) {
+      const id = modelButton.dataset.model;
+      if (selected.has(id)) { selected.delete(id); choose(selected); }
+      else { selected.add(id); choose(selected); setModel(id); }
+      draw();
+    }
+  };
+  draw();
+  return { reset, add, selected: () => sorted(selected) };
+}
+
 function modelDialog() {
   const cf = S.settings, ks = cf.api_key_source;
-  let mode = cf.model_mode === "official" ? "official" : "custom";
-  const L = SS.llm || {};
-  const state = L.error ? "要先在「账号」里登录。" : L.plan === "official" ? "这个账号已开通。" : L.plan === "stopped" ? "这个账号的官方服务已停用。" : "这个账号还没开通。";
-  openDialog({
+  let picker;
+  return openDialog({
     title: "模型", ok: "保存",
-    body: `<div class="mx-field"><div class="mx-seg" role="tablist" id="md-mode">${[["official", "官方"], ["custom", "自己的网关"]].map(([k, v]) => `<button role="tab" aria-selected="${k === mode}" class="${k === mode ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div></div>
-      <div id="md-official" ${mode === "official" ? "" : "hidden"}><p class="note">开通后不用填地址和密钥。${esc(state)}</p></div>
-      <div id="md-custom" class="stack" ${mode === "custom" ? "" : "hidden"}>`
-      + dlgField("gw", "网关地址", { value: cf.gateway, mono: true, ph: cf.default_gateway, help: "兼容 OpenAI 接口，到 /v1 为止" })
-      + dlgField("md", "模型", { value: cf.model_segment, mono: true, ph: cf.default_model || "比如 gpt-4.1-mini", help: "10 分钟摘要和日总结都用它。" })
-      + dlgField("key", "密钥", { type: "password", mono: true, ph: ks === "env" ? "在用环境变量里的" : ks ? KEEP : "sk-…", help: "" })
-      + (cf.default_gateway ? `<button class="mx-btn mx-btn--text mx-btn--sm" style="align-self:flex-start" id="md-reset">恢复默认地址和模型</button>` : "") + `</div>`,
+    body: `<div class="stack">`
+      + dlgField("gw", "网关地址", { value: cf.gateway, mono: true, ph: cf.default_gateway, help: "可填 DeepSeek、通义千问等兼容接口，也可填本机 http://127.0.0.1:11434/v1。仅直连此地址。" })
+      + dlgField("key", "密钥", { type: "password", mono: true, ph: ks === "env" ? "在用环境变量里的" : ks ? KEEP : "sk-…", help: "留空使用已保存的密钥。获取和测试使用当前填写的内容，保存后才会修改配置。" })
+      + modelClientHtml(cf)
+      + `<input type="hidden" id="md" value="${esc(cf.model_segment || "")}"><input type="hidden" id="model-list-selected">${modelPickerHtml()}`
+      + dlgField("daily-model", "日总结模型（选填）", { value: cf.model_daily || "", mono: true, help: "可与摘要模型不同；留空时使用当前所选摘要模型。" })
+      + (cf.default_gateway ? `<button type="button" class="mx-btn mx-btn--text mx-btn--sm" style="align-self:flex-start" id="md-reset">恢复默认地址和模型</button>` : "") + `</div>`,
     onOpen: (el) => {
-      const r = el.querySelector("#md-reset");
-      if (r) r.onclick = () => { el.querySelector("#gw").value = cf.default_gateway; el.querySelector("#md").value = cf.default_model; };
-      el.querySelector("#md-mode").onclick = (e) => {
-        const b = e.target.closest("[data-v]"); if (!b) return;
-        mode = b.dataset.v;
-        el.querySelectorAll("#md-mode button").forEach((x) => { x.classList.toggle("is-on", x === b); x.setAttribute("aria-selected", x === b); });
-        el.querySelector("#md-official").hidden = mode !== "official";
-        el.querySelector("#md-custom").hidden = mode !== "custom";
+      el.classList.add("model-dialog");
+      picker = bindModelPicker(el, {
+        getConnection: () => ({ gateway: dlgVal(el, "gw"), key: dlgVal(el, "key"), client: dlgVal(el, "model-client"), protocol: dlgVal(el, "model-protocol") }),
+        getModel: () => dlgVal(el, "md"), setModel: (id) => { el.querySelector("#md").value = id; },
+        getSelected: () => JSON.parse(el.querySelector("#model-list-selected").value || "[]"),
+        setSelected: (ids) => { el.querySelector("#model-list-selected").value = JSON.stringify(ids); },
+      });
+      el.querySelector("#model-list-selected").value = JSON.stringify(Array.isArray(cf.model_list) && cf.model_list.length ? cf.model_list : [cf.model_segment].filter(Boolean));
+      picker.selected();
+      for (const id of ["gw", "key"]) el.querySelector(`#${id}`).addEventListener("input", picker.reset);
+      el.querySelector("#model-client").onchange = () => {
+        if (dlgVal(el, "model-client") === "codex") el.querySelector("#model-protocol").value = "responses";
+        picker.reset();
       };
+      el.querySelector("#model-protocol").onchange = picker.reset;
+      const reset = el.querySelector("#md-reset");
+      if (reset) reset.onclick = () => { el.querySelector("#gw").value = cf.default_gateway; el.querySelector("#md").value = cf.default_model || ""; picker.reset(); };
     },
     submit: async (el) => {
-      if (mode === "official") { await saveSome({ model_mode: "official" }); SS.llm = null; return renderSettings(); }
-      const gw = dlgVal(el, "gw").replace(/\/+$/, ""), md = dlgVal(el, "md"), key = dlgVal(el, "key");
-      if (!isUrl(gw)) throw "网关地址要以 https:// 开头，比如 https://api.openai.com/v1";
-      if (!md) throw "填一个模型名。";
-      await saveSome({ model_mode: "custom", gateway: gw, model_segment: md, model_daily: md });
-      if (key) { try { await call("set_api_key", { key }); } catch (x) { throw `地址和模型存好了，密钥没存进去：${x}`; } S.settings = await call("get_settings"); }
-      renderSettings();
-    },
-  });
-}
-
-/** 转写服务：地址（默认官方，可换自建）、你在对话里的称呼。认账号用同步服务发的票据，不用另填口令 */
-function asrDialog() {
-  const cf = S.settings;
-  openDialog({
-    title: "转写服务", ok: "保存",
-    body: dlgField("ta", "地址", { value: cf.transcribe_server, mono: true, ph: cf.default_transcribe_server, help: `官方的是 ${esc(cf.default_transcribe_server)}，也可以填自己搭的` })
-      + `<button class="mx-btn mx-btn--text mx-btn--sm" style="align-self:flex-start" id="ta-reset">用官方的</button>`
-      + dlgField("tn", "你在对话里叫什么", { value: cf.speaker_name, ph: "我", help: "转写里你说的话标成这个名字" }),
-    onOpen: (el) => { el.querySelector("#ta-reset").onclick = () => { el.querySelector("#ta").value = cf.default_transcribe_server; }; },
-    submit: async (el) => {
-      const a = dlgVal(el, "ta").replace(/\/+$/, ""), n = dlgVal(el, "tn");
-      if (a && !isUrl(a)) throw "地址要以 https:// 开头。";
-      await saveSome({ transcribe_server: !a || a === cf.default_transcribe_server ? "" : a, speaker_name: n });
-      renderSettings();
-    },
-  });
-}
-
-/** 高德：「Web 服务」Key（地名、附近的店、搜地点），「Web端(JS API)」Key 和安全密钥（能缩放的地图）。留空不改 */
-function amapDialog() {
-  const cf = S.settings, hex = /^[0-9a-f]{32}$/i;
-  let mode = cf.map_mode === "official" ? "official" : "custom";
-  openDialog({
-    title: "高德地图", ok: "保存",
-    body: `<div class="mx-field"><div class="mx-seg" role="tablist" id="am-mode">${[["official", "官方"], ["custom", "自己的 Key"]].map(([k, v]) => `<button role="tab" aria-selected="${k === mode}" class="${k === mode ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div></div>
-      <div id="am-official" ${mode === "official" ? "" : "hidden"}><p class="note">开通后不用填 Key</p></div>
-      <div id="am-custom" class="stack" ${mode === "custom" ? "" : "hidden"}>`
-      + dlgField("ak", "Web 服务 Key", { type: "password", mono: true, ph: cf.has_amap_key ? KEEP : "", help: `用于地名和附近的店 · ${howto("amap", "怎么获取")}` })
-      + dlgField("jk", "地图 Key", { type: "password", mono: true, ph: cf.has_amap_js ? KEEP : "" })
-      + dlgField("jc", "地图安全密钥", { type: "password", mono: true, ph: cf.has_amap_js ? KEEP : "", help: `用于显示可拖动的地图 · ${howto("amap", "怎么获取")}` }) + `</div>`,
-    onOpen: (el) => {
-      el.querySelector("#am-mode").onclick = (e) => {
-        const b = e.target.closest("[data-v]"); if (!b) return;
-        mode = b.dataset.v;
-        el.querySelectorAll("#am-mode button").forEach((x) => { x.classList.toggle("is-on", x === b); x.setAttribute("aria-selected", x === b); });
-        el.querySelector("#am-official").hidden = mode !== "official";
-        el.querySelector("#am-custom").hidden = mode !== "custom";
-      };
-    },
-    submit: async (el) => {
-      if (mode === "official") { await saveSome({ map_mode: "official" }); LM.loading = null; return renderSettings(); }
-      const ak = dlgVal(el, "ak"), jk = dlgVal(el, "jk"), jc = dlgVal(el, "jc");
-      if (ak && !hex.test(ak)) throw "Web 服务 Key 是 32 位的字母数字。";
-      if ((jk || jc) && !(hex.test(jk) && hex.test(jc))) throw "地图 Key 和安全密钥要一起填，各 32 位";
-      if (!ak && !cf.has_amap_key) throw "填一个 Web 服务 Key，或者改用官方。";
-      if (ak) await call("set_amap_key", { key: ak });
-      if (jk) await call("set_amap_js", { key: jk, code: jc });
-      await saveSome({ map_mode: "custom" }); LM.loading = null; renderSettings();
-    },
-  });
-}
-
-/** 同步服务器：默认官方的，自己部署了同步服务（app/sync-server）可以换。只能在登录前换 */
-function syncServerDialog() {
-  const cf = S.settings;
-  openDialog({
-    title: "同步服务器", ok: "保存",
-    body: dlgField("ss", "地址", { value: cf.sync_server, mono: true, ph: cf.default_sync_server, help: `官方的是 ${esc(cf.default_sync_server)}，也可以填自己部署的` })
-      + `<button class="mx-btn mx-btn--text mx-btn--sm" style="align-self:flex-start" id="ss-reset">用官方的</button>`,
-    onOpen: (el) => { el.querySelector("#ss-reset").onclick = () => { el.querySelector("#ss").value = cf.default_sync_server; }; },
-    submit: async (el) => {
-      const v = dlgVal(el, "ss").replace(/\/+$/, "");
-      if (v && !isUrl(v)) throw "地址要以 https:// 开头。";
-      await saveSome({ sync_server: !v || v === cf.default_sync_server ? "" : v });
+      picker.add();
+      const gateway = modelGatewayAddress(dlgVal(el, "gw"));
+      const model = dlgVal(el, "md"), key = dlgVal(el, "key");
+      if (!model) throw "从列表选择一个模型，或手动添加模型 ID。";
+      const modelList = picker.selected();
+      if (!modelList.length) throw "请至少选择一个模型；可全选或点击指定模型。";
+      if (key) await call("set_api_key", { key });
+      await saveSome({ gateway, model_segment: model, model_list: modelList, model_daily: dlgVal(el, "daily-model") || model, model_client: dlgVal(el, "model-client"), model_protocol: dlgVal(el, "model-protocol") });
       renderSettings();
     },
   });
@@ -2653,80 +2457,24 @@ function syncServerDialog() {
 
 // ---------- 首次启动引导 ----------
 
-const OB = { step: 0, err: null, msg: null, busy: false, timer: null, mode: "official" };
-
+const OB = { step: 0, timer: null };
 async function renderOnboarding() {
   document.documentElement.classList.add("onboarding");
-  if (!S.settings) { S.settings = await call("get_settings"); S.draft = JSON.parse(JSON.stringify(S.settings)); }
-  const st = (S.status = await call("get_status"));
-  const perm = st.permissions || {};
-  const steps = ["这是什么", "授权", "模型", "同步"];
-  const dots = `<div class="ob-steps">${steps.map((x, i) => `<span class="${i === OB.step ? "is-on" : i < OB.step ? "done" : ""}">${i + 1}. ${x}</span>`).join("")}</div>`;
-  const permLabel = (kind) => perm[kind] ? "已授权" : (perm[`${kind}_label`] || "未授权");
-  const permDesc = (kind, desc) => (!perm[kind] && perm[`${kind}_label`]) ? "系统里还开着，但当前签名未生效，请关掉再打开" : desc;
-  const permRow = (kind, name, desc) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${permDesc(kind, desc)}</div></div>
-    <span class="mx-status mx-status--${perm[kind] ? "ok" : "warn"}">${permLabel(kind)}</span>${perm[kind] ? "" : `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-perm="${kind}">去授权</button>`}</div>`;
-  const msg = (OB.err ? `<div class="mx-field-error">${esc(OB.err)}</div>` : "") + (OB.msg ? `<p class="note">${esc(OB.msg)}</p>` : "");
-  const body = [
-    `<h1 class="ob-title">Be Authentic. Your Yesterdays.</h1>
-     <p class="ob-lead">Beayy 在后台记下你在电脑和手机上的一天，写成摘要和日总结。</p>
-     <div class="ob-list">
-       <div><b>记什么</b><span>电脑上的应用、窗口、输入、点击和屏幕文字；手机上每个 app 的时长。密码框不记，可以排除某些 app、随时暂停或删除。</span></div>
-       <div><b>存在哪</b><span>都存在这台电脑上；写摘要时，记录会发给你选的模型服务。</span></div>
-     </div>`,
-    IS_WIN ? `<h2>授权</h2><p class="ob-lead">Windows 上不用授权。杀毒软件拦键盘监听时，放行 Beayy。</p>`
-    : `<h2>授权</h2><p class="ob-lead">macOS 要你亲自打开这三项权限。</p>
-     ${permRow("accessibility", "辅助功能", "读取窗口标题和屏幕上的文字")}
-     ${permRow("input_monitoring", "输入监控", "判断你在打字还是程序在操作")}
-     ${permRow("full_disk_access", "完全磁盘访问（可选）", `读取 iPhone 的屏幕使用时间 · ${howto("screentime", "怎么设置")}`)}`,
-    `<h2>模型</h2><p class="ob-lead">摘要和日总结要用一个大模型。用官方的：账号开通后登录就能用，不用填；也可以填自己的网关（任何兼容 OpenAI 接口的服务）。不选也能先只记录，以后在设置里改。</p>
-     <div class="mx-seg" role="tablist" id="ob-mode" style="margin-bottom:var(--space-4)">${[["official", "用官方"], ["custom", "自己的网关"]].map(([k, v]) => `<button role="tab" aria-selected="${k === OB.mode}" class="${k === OB.mode ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div>
-     ${OB.mode === "official" ? `<p class="note">下一步登录账号，开通后就能用</p>` : `<div class="stack"><div class="mx-field"><label for="ob-gw">接口地址</label><input class="mx-input mono" id="ob-gw" value="${esc(S.draft.gateway || "https://api.openai.com/v1")}"></div>
-       <div class="mx-field"><label for="ob-model">模型名</label><input class="mx-input mono" id="ob-model" value="${esc(S.draft.model_segment || "")}" placeholder="比如 gpt-4.1-mini"></div>
-       <div class="mx-field"><label for="ob-key">密钥</label><input class="mx-input mono" id="ob-key" type="password" autocomplete="off" placeholder="${S.settings.has_api_key ? "已经存过一把，不改就留空" : "sk-…"}"></div>
-       <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ob-test" ${OB.busy ? "disabled" : ""}>${OB.busy ? "测试中…" : "存下并测试一下"}</button></div></div>`}`,
-    `<h2>同步（可选）</h2><p class="ob-lead">有好几台设备，就注册或登录一个账号；只用这一台可以跳过。</p>
-     <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary" id="ob-account">去登录或注册</button></div>`,
-  ][OB.step];
-  const last = OB.step === steps.length - 1;
-  $app.innerHTML = `<div class="ob">${dots}<div class="ob-body">${body}${msg}</div>
-    <div class="ob-nav">${OB.step ? `<button class="mx-btn mx-btn--text" id="ob-back">上一步</button>` : "<span></span>"}
-      <button class="mx-btn mx-btn--primary" id="ob-next">${last ? "开始使用" : OB.step === 2 && OB.mode === "custom" && !S.settings.has_api_key ? "先跳过" : "继续"}</button></div></div>`;
-  const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
-  on("ob-mode", (e) => { const b = e.target.closest("[data-v]"); if (b) { OB.mode = b.dataset.v; OB.err = OB.msg = null; renderOnboarding(); } });
-  $app.querySelectorAll("[data-perm]").forEach((b) => (b.onclick = () => call("open_permission", { kind: b.dataset.perm })));
-  // 授权这一步：每 2 秒看一次权限，用户从系统设置回来就更新
+  const st = S.status = await call("get_status"), perm = st.permissions || {};
+  const steps = ["认识时见", "本机权限", "自主配置 AI"];
+  const permissionRows = [["accessibility", "辅助功能", "读取应用窗口与界面文字"], ["input_monitoring", "输入监控", "记录键鼠活动"], ["full_disk_access", "完全磁盘访问（可选）", "读取本机 iPhone 屏幕使用时间"]].map(([key,label,help]) => setRow(label,help,perm[key] ? pill(true,"已授权") : smallBtn("ob-perm-"+key,"去授权"))).join("");
+  const bodies = [
+    `<h1 class="ob-title">时见 TimeSeen</h1><p class="ob-lead">看见时间，看见自己。</p><p>本地记录一天，管理待办，留出专注时间。人文帮出品。</p><p class="note">记录默认保存在本机。AI 分析只会直接请求你配置的模型服务，定时分析默认关闭。</p>`,
+    `<h2>本机权限</h2>${IS_WIN ? '<p>Windows 无需单独授权。</p>' : permissionRows}`,
+    `<h2>自主配置 AI</h2><p class="ob-lead">支持国产及其他兼容 OpenAI 的模型服务，也支持本地模型。填写自己的 Base URL、API Key 和模型名。</p><button class="mx-btn mx-btn--secondary" id="ob-model-settings">配置模型</button><p class="note">可以稍后设置，离线时仍可记录、计时和管理待办。</p>`
+  ];
+  $app.innerHTML = `<div class="ob"><div class="ob-steps">${steps.map((name,i)=>`<span class="${i===OB.step?"is-on":""}">${i+1}. ${name}</span>`).join("")}</div><div class="ob-body">${bodies[OB.step]}</div><div class="ob-nav">${OB.step?'<button class="mx-btn mx-btn--text" id="ob-back">上一步</button>':'<span></span>'}<button class="mx-btn mx-btn--primary" id="ob-next">${OB.step===2?"开始使用":"继续"}</button></div></div>`;
   clearInterval(OB.timer);
-  if (OB.step === 1) OB.timer = setInterval(async () => { const p = (await call("get_status")).permissions || {}; if (JSON.stringify(p) !== JSON.stringify(perm)) renderOnboarding(); }, 2000);
-  const saveModel = async () => {
-    const gw = document.getElementById("ob-gw").value.trim(), model = document.getElementById("ob-model").value.trim(), key = document.getElementById("ob-key").value.trim();
-    S.draft = { ...S.draft, model_mode: "custom", gateway: gw, model_segment: model, model_daily: model };
-    const { has_api_key, api_key_source, ...rest } = S.draft;
-    await call("save_settings", { settings: rest });
-    if (key) await call("set_api_key", { key });
-    S.settings = await call("get_settings");
-  };
-  on("ob-test", async () => {
-    OB.busy = true; OB.err = OB.msg = null; renderOnboarding();
-    try { await saveModel(); await call("test_model"); OB.msg = "连上了，模型能用。"; } catch (x) { OB.err = `没连上：${x}`; }
-    OB.busy = false; renderOnboarding();
-  });
-  on("ob-back", () => { OB.step--; OB.err = OB.msg = null; renderOnboarding(); });
-  const finish = async (to) => {
-    clearInterval(OB.timer);
-    const { has_api_key, api_key_source, ...rest } = { ...S.draft, onboarded: true };
-    await call("save_settings", { settings: rest });
-    S.settings = await call("get_settings"); S.draft = JSON.parse(JSON.stringify(S.settings));
-    document.documentElement.classList.remove("onboarding");
-    location.hash = to; route();
-  };
-  on("ob-account", () => finish("#/settings"));
-  on("ob-next", async () => {
-    if (OB.step === 2 && OB.mode === "official") { S.draft = { ...S.draft, model_mode: "official" }; await call("save_settings", { settings: { model_mode: "official" } }); }
-    else if (OB.step === 2 && (document.getElementById("ob-model").value.trim() || document.getElementById("ob-key").value.trim())) { try { await saveModel(); } catch (x) { OB.err = String(x); return renderOnboarding(); } }
-    if (last) return finish("#/today");
-    OB.step++; OB.err = OB.msg = null; renderOnboarding();
-  });
+  if (OB.step === 1) OB.timer = setInterval(async()=>{const next=(await call("get_status")).permissions||{};if(JSON.stringify(next)!==JSON.stringify(perm))renderOnboarding();},2000);
+  document.getElementById("ob-back")?.addEventListener("click",()=>{OB.step--;renderOnboarding();});
+  document.getElementById("ob-next").onclick=async()=>{if(OB.step===2){clearInterval(OB.timer);await saveSome({onboarded:true});document.documentElement.classList.remove("onboarding");location.hash="#/today";route();}else{OB.step++;renderOnboarding();}};
+  document.getElementById("ob-model-settings")?.addEventListener("click",modelDialog);
+  $app.querySelectorAll('[id^="ob-perm-"]').forEach(b=>b.onclick=()=>call("open_permission",{kind:b.id.replace("ob-perm-","")}));
 }
 
 // ---------- 路由 ----------
@@ -2740,7 +2488,8 @@ async function route1() {
   const [page = "today", arg, arg2] = location.hash.replace(/^#\/?/, "").split("/");
   // 换页就关掉弹层；刚拿到恢复码那个必须点「我已存好」才关
   if (DLG && DLG.closable) closeDialog();
-  S.page = ["today", "summary", "rules", "todos", "devices", "settings"].includes(page) ? page : "today";
+  S.page = ["today", "focus", "summary", "rules", "todos", "devices", "settings"].includes(page) ? page : "today";
+  $app.classList.toggle("focus-page", S.page === "focus");
   markNav(S.page);
   // 四象限待办用宽版；其它页（除今天自己会 toggle）先收掉
   if (S.page !== "todos" && S.page !== "today") $app.classList.remove("wide");
@@ -2749,7 +2498,8 @@ async function route1() {
     if (!S.settings) { S.settings = await call("get_settings"); S.draft = JSON.parse(JSON.stringify(S.settings)); }
     if (!S.settings.onboarded && TAURI && !(S.status && S.status.mobile)) return renderOnboarding();
     if (S.page !== "devices") { DEV.id = null; stopEventsTimer(); }
-    if (S.page === "summary") await renderSummary(arg);
+    if (S.page === "focus") await TimeSeenFocus.show();
+    else if (S.page === "summary") await renderSummary(arg);
     else if (S.page === "rules") await renderRules();
     else if (S.page === "todos") await renderNotes(arg);
     else if (S.page === "devices") { if (arg) await renderDevice(decodeURIComponent(arg), arg2); else { DEV.id = null; stopEventsTimer(); await renderDevices(); } }
@@ -2798,7 +2548,7 @@ setInterval(async () => {
   document.getElementById("main").scrollTop = y;
 }, 60000);
 route();
-// 自测：BEAYY_PERF=1 启动时依次切各页三轮并记耗时（见 perf.txt）
+// 自测：TIMESEEN_PERF=1 启动时依次切各页三轮并记耗时（见 perf.txt）
 setTimeout(async () => {
   if (!TAURI) return;
   let st; try { st = await TAURI.invoke("get_status"); } catch (e) { return; }
@@ -2815,31 +2565,39 @@ setTimeout(async () => {
   perfNote("自测结束");
 }, 6000);
 
-/* beayy-window-drag-js */
+/* 窗口：侧栏顶和页标题可拖动；在这两处双击放大或还原。不画一条可见的标题栏。 */
 (function () {
   if (!window.__TAURI__) return;
   const noDrag = 'button,a,input,select,textarea,label,.mx-iconbtn,.win-tools,.mx-head-right,.mx-nav';
+  const current = () => {
+    const w = window.__TAURI__.window;
+    if (w && w.getCurrentWindow) return w.getCurrentWindow();
+    if (w && w.appWindow) return w.appWindow;
+    return null;
+  };
+  const inDragRegion = (e) => !e.target.closest(noDrag) && e.target.closest('[data-tauri-drag-region]');
   document.addEventListener('mousedown', (e) => {
-    if (e.button !== 0) return;
-    if (e.target.closest(noDrag)) return;
-    const region = e.target.closest('[data-tauri-drag-region]');
-    if (!region) return;
-    const start = async () => {
-      try {
-        const w = window.__TAURI__.window;
-        if (w?.getCurrentWindow) {
-          await w.getCurrentWindow().startDragging();
-          return;
-        }
-        if (w?.appWindow?.startDragging) {
-          await w.appWindow.startDragging();
-          return;
-        }
-        // older global path
-        const { getCurrentWindow } = window.__TAURI__.window || {};
-        if (getCurrentWindow) await getCurrentWindow().startDragging();
-      } catch (_) {}
+    if (e.button !== 0 || e.detail > 1) return;
+    if (!inDragRegion(e)) return;
+    const x = e.screenX, y = e.screenY;
+    const move = (ev) => {
+      if (Math.hypot(ev.screenX - x, ev.screenY - y) < 4) return;
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      const win = current();
+      if (win && win.startDragging) win.startDragging();
     };
-    start();
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  }, true);
+  document.addEventListener('dblclick', (e) => {
+    if (!inDragRegion(e)) return;
+    const win = current();
+    if (!win || !win.isMaximized || !win.maximize || !win.unmaximize) return;
+    win.isMaximized().then((on) => (on ? win.unmaximize() : win.maximize())).catch(() => {});
   }, true);
 })();

@@ -3,8 +3,8 @@
 //! Beayy/devices/iphone-*/ 的 iPhone 前台事件（手机算法同 脚本/日数据包.py 的 section_phone）。
 //! 采集／摘要／时间线段：读 `data_root()`（测试版影子目录与写入一致）；设置／规矩／待办仍在正式根 `default_root()`。
 
-use beayy_core::{data_root, default_root};
-use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
+use timeseen_core::{data_root, default_root};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use regex::Regex;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -281,7 +281,7 @@ fn phone_sessions(used: &[&(f64, f64, String)], names: &HashMap<String, String>)
 fn self_segments() -> HashMap<String, Vec<Value>> {
     let mut out: HashMap<String, Vec<Value>> = HashMap::new();
     // 项目名按别名表归到规范名，领域按登记表固定（同一个项目前后一致）
-    let sm = beayy_summary::Summarizer::new(data_root());
+    let sm = timeseen_summary::Summarizer::new(data_root());
     let (aliases, domains) = (sm.aliases(), sm.domains());
     let canon = |parts: Option<&Value>| -> Value {
         Value::Array(
@@ -298,7 +298,7 @@ fn self_segments() -> HashMap<String, Vec<Value>> {
                     }
                     x["project"] = json!(p);
                     // 旧分类名（开发、会议……）也归到现在的二级类型
-                    let act = beayy_summary::canon_activity(x["activity"].as_str().unwrap_or(""));
+                    let act = timeseen_summary::canon_activity(x["activity"].as_str().unwrap_or(""));
                     x["activity"] = json!(act);
                     x
                 })
@@ -306,17 +306,17 @@ fn self_segments() -> HashMap<String, Vec<Value>> {
         )
     };
     // 本机写的在 summaries/；别的电脑写的经同步落在 devices/<设备>/summaries/（带上是哪台）
-    let me = beayy_core::local_device();
+    let me = timeseen_core::local_device();
     let mut files: Vec<(PathBuf, String)> = vec![];
     let list = |dir: PathBuf| -> Vec<PathBuf> { fs::read_dir(dir).map(|r| r.filter_map(|e| e.ok()).map(|e| e.path()).collect()).unwrap_or_default() };
     files.extend(list(data_root().join("summaries")).into_iter().map(|p| (p, me.clone())));
     // 测试版影子目录：再并上正式目录里的旧摘要（开测前的正式记录），同 start 以影子为准
-    if beayy_core::shadow_mode() && data_root() != default_root() {
+    if timeseen_core::shadow_mode() && data_root() != default_root() {
         files.extend(list(default_root().join("summaries")).into_iter().map(|p| (p, me.clone())));
     }
     for dev in list(data_root().join("devices")) {
         let d = dev.file_name().unwrap_or_default().to_string_lossy().to_string();
-        if d != me && beayy_summary::is_computer(&d) {
+        if d != me && timeseen_summary::is_computer(&d) {
             files.extend(list(dev.join("summaries")).into_iter().map(|p| (p, d.clone())));
         }
     }
@@ -356,7 +356,7 @@ fn self_segments() -> HashMap<String, Vec<Value>> {
             .map(|c| c[1].lines().filter(|l| l.starts_with("- ")).map(|l| l[2..].trim().to_string()).collect())
             .unwrap_or_default();
         let date = start.with_timezone(&Local).format("%Y-%m-%d").to_string();
-        let fm = beayy_summary::front(&md);
+        let fm = timeseen_summary::front(&md);
         out.entry(date).or_default().push(json!({
             "active_sec": fm.get("active_sec").cloned().unwrap_or(Value::Null),
             "parts": canon(fm.get("parts")),
@@ -432,7 +432,7 @@ pub fn live_computer(date: NaiveDate) -> Option<Value> {
 
 fn compute_live(date: NaiveDate) -> Option<Value> {
     let (s, e) = day_bounds(date);
-    let act = beayy_summary::Summarizer::new(data_root()).activity(s.with_timezone(&Utc), e.with_timezone(&Utc));
+    let act = timeseen_summary::Summarizer::new(data_root()).activity(s.with_timezone(&Utc), e.with_timezone(&Utc));
     if act.spans.is_empty() && act.windows.is_empty() {
         return None;
     }
@@ -468,7 +468,7 @@ fn compute_live(date: NaiveDate) -> Option<Value> {
     }))
 }
 
-// ---------- 手表对话、iPhone 停留点（beayy-remote 从录音服务器拉来的） ----------
+// ---------- 历史手表对话、iPhone 停留点（只读本地记录） ----------
 
 /// 两句之间空档超过 3 分钟算另一段对话（同 脚本/日数据包.py 的 section_audio）
 const CONV_GAP: f64 = 180.0;
@@ -480,7 +480,7 @@ const REC_GAP: f64 = 300.0;
 /// 某种设备（watch-、iphone-）在 [from, to) 里的事件：只读这段时间的分段目录
 fn device_events(prefix: &str, types: &[&str], from: DateTime<Utc>, to: DateTime<Utc>) -> Vec<Value> {
     let mut out = vec![];
-    let (lo, hi) = (beayy_core::segment_key(from), beayy_core::segment_key(to));
+    let (lo, hi) = (timeseen_core::segment_key(from), timeseen_core::segment_key(to));
     let Ok(devs) = fs::read_dir(data_root().join("devices")) else { return out };
     for dev in devs.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with(prefix)) {
         let Ok(segs) = fs::read_dir(dev.path().join("segments")) else { continue };
@@ -647,7 +647,7 @@ fn labels_path() -> PathBuf {
 
 /// 给一个地方起名（家、公司……），存进 Beayy/places/labels.json；半径内已有的就改它，label 为空＝删掉这个名字。
 /// 第一次写时先把外部数据目录 raw/places/labels.json 里已有的抄过来，免得新文件把它们盖住
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn set_place_label(lat: f64, lon: f64, label: String, kind: Option<String>) -> Result<(), String> {
     let mut all = place_labels();
     let label = label.trim().to_string();
@@ -691,7 +691,7 @@ fn write_json(p: &PathBuf, v: &Value) -> Result<(), String> {
 
 /// 确认一段停留是哪家店（「这次在哪」里点的，或自己输入的店名）；店的坐标用高德给的，自己输入的用停留点的。
 /// 同一处同名的店只记一条
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn set_place_pick(id: String, shop: String, kind: Option<String>, lat: f64, lon: f64) -> Result<(), String> {
     let shop = shop.trim().to_string();
     if shop.is_empty() {
@@ -735,7 +735,7 @@ fn picks_of(v: &Value) -> Vec<Value> {
 }
 
 /// 撤销对一段停留的确认（名字退回只写区域）
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn clear_place_pick(id: String) -> Result<(), String> {
     let mut p = place_picks();
     if let Some(m) = p["stays"].as_object_mut() {
@@ -746,7 +746,7 @@ pub fn clear_place_pick(id: String) -> Result<(), String> {
 
 /// 「地点 · 常去」：最近 days 天（默认 30）的停留按地方合计。起过名的按名字合（没去过的也列，次数 0），
 /// 没起名的按区域合（同一个区县 · 区域），只列去过 5 次以上的。只用缓存，不问高德（没缓存过分级的用手机传来的地名）
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn place_stats(days: Option<i64>) -> Value {
     let days = days.unwrap_or(30).clamp(1, 120);
     let today = Local::now().date_naive();
@@ -793,13 +793,13 @@ pub fn place_stats(days: Option<i64>) -> Value {
 }
 
 /// 常去的地方（自己起过名的）：[{label, type, lat, lon, r, address?}]，设置页列出来改
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn list_place_labels() -> Vec<Value> {
     place_labels()
 }
 
 /// 改常去的地方里的一项：名字、种类、范围（米）、地址；名字空＝删掉。第一次写同 set_place_label（先把外部数据目录的抄过来）
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn edit_place_label(index: usize, label: String, kind: String, r: f64, address: Option<String>) -> Result<(), String> {
     let mut all = place_labels();
     if index >= all.len() {
@@ -827,11 +827,6 @@ pub fn edit_place_label(index: usize, label: String, kind: String, r: f64, addre
 /// 某天的停留点（iPhone、手表记的位置），读法同 脚本/日数据包.py 的 read_places／load_stays：
 /// 同一个停留点取最新一版（rev 大的）；可信程度低的（slc、手表）和更可信的重叠超过自身一半的丢掉；
 /// 还没离开的算到下一个到达或现在；同一地点 15 分钟内并成一段，重叠的前一段截到后一段开始。没有任何停留点记录时返回 None
-pub fn places_day(date: NaiveDate) -> Option<Value> {
-    places_day_opt(date, true)
-}
-
-/// online＝false 只用缓存，不问高德（统计 30 天常去的地方时用，免得一次问几百次）
 pub fn places_day_opt(date: NaiveDate, online: bool) -> Option<Value> {
     let (s, e) = day_bounds(date);
     let (s, e) = (s.with_timezone(&Utc), e.with_timezone(&Utc));
@@ -1034,11 +1029,10 @@ fn pack_of(repo: &Option<PathBuf>, date: &str) -> Option<Value> {
 }
 
 fn summary_of(repo: &Option<PathBuf>, date: &str) -> Option<String> {
-    // 外部目录里有就用它的；没有就用 app 自己写的（Beayy/daily/）
+    // 本机生成的总结优先，确保手动更新后页面能读到新内容。
     let name = format!("日总结_{}.md", date.replace('-', ""));
-    repo.as_ref()
-        .and_then(|r| fs::read_to_string(r.join("日总结").join(&name)).ok())
-        .or_else(|| fs::read_to_string(data_root().join("daily").join(&name)).ok())
+    fs::read_to_string(data_root().join("daily").join(&name)).ok()
+        .or_else(|| repo.as_ref().and_then(|r| fs::read_to_string(r.join("日总结").join(&name)).ok()))
         // 测试版（影子目录）也认正式版写的日总结
         .or_else(|| fs::read_to_string(default_root().join("daily").join(&name)).ok())
 }
@@ -1068,7 +1062,7 @@ fn computer_event_dates() -> HashSet<String> {
     let devs: Vec<fs::DirEntry> = roots.iter().filter_map(|r| fs::read_dir(r.join("devices")).ok()).flat_map(|d| d.filter_map(|e| e.ok())).collect();
     for dev in devs {
         let name = dev.file_name().to_string_lossy().to_string();
-        if !beayy_summary::is_computer(&name) {
+        if !timeseen_summary::is_computer(&name) {
             continue;
         }
         let Ok(segs) = fs::read_dir(dev.path().join("segments")) else { continue };
@@ -1098,7 +1092,7 @@ fn phone_event_dates(ev: &[PhoneEv]) -> HashSet<String> {
     dates
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn list_days() -> Vec<Value> {
     let repo = repo_path();
     let names = app_names();
@@ -1148,10 +1142,122 @@ pub fn list_days() -> Vec<Value> {
 }
 
 
-/// 当前整 10 分 UTC 段若已有事件、还没摘要，返回一条「进行中」占位（不进 work 统计也可，title 特殊）
-fn open_segment_placeholder(taken: &HashSet<String>) -> Option<Value> {
+fn active_seconds_from_events(start: DateTime<Utc>, end: DateTime<Utc>, events: &[Value]) -> i64 {
+    let mut spans = Vec::new();
+    let mut current = None;
+    for event in events {
+        let Some(timestamp) = event["timestamp"].as_str().and_then(|x| DateTime::parse_from_rfc3339(x).ok()).map(|x| x.with_timezone(&Utc)) else {
+            continue;
+        };
+        match event["event_type"].as_str() {
+            Some("presence") => {
+                if event["state"] == "active" {
+                    current = current.or(Some(timestamp));
+                } else if let Some(from) = current.take() {
+                    let idle = event["idle_seconds"].as_f64().unwrap_or(180.0);
+                    spans.push((from, timestamp - Duration::milliseconds((idle * 1000.0) as i64)));
+                }
+            }
+            Some("system.sleep" | "screen.sleep" | "screen.locked" | "app.quit" | "app.paused") => {
+                if let Some(from) = current.take() {
+                    spans.push((from, timestamp));
+                }
+            }
+            Some("system.wake" | "screen.wake" | "screen.unlocked" | "app.resumed") => {
+                current = current.or(Some(timestamp));
+            }
+            Some("heartbeat") if event["state"] == "active" && event["bundle_id"] != "com.apple.loginwindow" => {
+                current = current.or(Some(timestamp));
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = current {
+        let last = events
+            .iter()
+            .filter_map(|event| event["timestamp"].as_str())
+            .filter_map(|x| DateTime::parse_from_rfc3339(x).ok())
+            .map(|x| x.with_timezone(&Utc))
+            .max()
+            .unwrap_or(from);
+        spans.push((from, end.min(last + Duration::seconds(60))));
+    }
+    spans
+        .into_iter()
+        .map(|(from, to)| (to.min(end) - from.max(start)).num_seconds().max(0))
+        .sum()
+}
+
+fn local_segment_value(start: DateTime<Utc>, end: DateTime<Utc>, events: &[Value], live: Option<&Value>, open: bool) -> Option<Value> {
+    if events.is_empty() {
+        return None;
+    }
+    let selected = events.iter().rev().find(|event| {
+        matches!(event["event_type"].as_str(), Some("app.activated" | "window.changed" | "ui.text" | "heartbeat"))
+            && event["app_name"].as_str().map(|x| !x.is_empty()).unwrap_or(false)
+    });
+    let app = selected.and_then(|event| event["app_name"].as_str()).unwrap_or("");
+    let window = selected.and_then(|event| event["window_title"].as_str()).unwrap_or("");
+    let tracked = events.iter().any(|event| matches!(event["event_type"].as_str(), Some("presence" | "heartbeat")));
+    let has_activity = events.iter().any(|event| {
+        (matches!(event["event_type"].as_str(), Some("presence" | "heartbeat")) && event["state"] == "active")
+            || matches!(event["event_type"].as_str(), Some("keyboard.text_input" | "keyboard.submit" | "mouse.click" | "mouse.scroll"))
+    });
+    let idle = tracked && !has_activity;
+    let active_sec = live
+        .and_then(|value| value["spans"].as_array())
+        .map(|spans| {
+            spans
+                .iter()
+                .filter_map(|span| {
+                    let from = DateTime::parse_from_rfc3339(span.get(0)?.as_str()?).ok()?.with_timezone(&Utc).max(start);
+                    let to = DateTime::parse_from_rfc3339(span.get(1)?.as_str()?).ok()?.with_timezone(&Utc).min(end);
+                    (to > from).then_some((to - from).num_seconds())
+                })
+                .sum::<i64>()
+        })
+        .unwrap_or_else(|| active_seconds_from_events(start, end, events));
+    let mut apps = Vec::new();
+    for event in events {
+        if let Some(bundle) = event["bundle_id"].as_str().filter(|x| !x.is_empty() && !apps.iter().any(|y| y == x)) {
+            apps.push(bundle.to_string());
+        }
+    }
+    let description = if idle {
+        String::new()
+    } else if open {
+        "本地记录中".to_string()
+    } else if window.is_empty() || window == app {
+        "本地采集到电脑活动".to_string()
+    } else {
+        format!("窗口：{window}")
+    };
+    let mut value = json!({
+        "active_sec": active_sec,
+        "parts": [],
+        "start": utc_iso(start),
+        "end": utc_iso(end),
+        "kind": if idle { "idle" } else { "10min" },
+        "source": "beayy",
+        "device": timeseen_core::local_device(),
+        "title": if idle { timeseen_summary::IDLE_TITLE } else if app.is_empty() { "电脑活动" } else { app },
+        "description": description,
+        "memory": "",
+        "context": [],
+        "recording": "",
+        "apps": apps,
+        "fallback": true,
+    });
+    if open {
+        value["open"] = json!(true);
+    }
+    Some(value)
+}
+
+/// 当前整 10 分 UTC 段若已有事件、还没摘要，直接显示本地事件，不等模型。
+fn open_segment_placeholder(taken: &HashSet<String>, live: Option<&Value>) -> Option<Value> {
     let now = Utc::now();
-    let key = beayy_core::segment_key(now); // 如 2026-10-28T14-50-00Z
+    let key = timeseen_core::segment_key(now); // 如 2026-10-28T14-50-00Z
     let start = chrono::NaiveDateTime::parse_from_str(&key[..19], "%Y-%m-%dT%H-%M-%S").ok()?;
     let start = Utc.from_utc_datetime(&start);
     let start_iso = utc_iso(start);
@@ -1160,7 +1266,7 @@ fn open_segment_placeholder(taken: &HashSet<String>) -> Option<Value> {
     }
     let path = data_root()
         .join("devices")
-        .join(beayy_core::local_device())
+        .join(timeseen_core::local_device())
         .join("segments")
         .join(&key)
         .join("events.jsonl");
@@ -1168,25 +1274,43 @@ fn open_segment_placeholder(taken: &HashSet<String>) -> Option<Value> {
     if meta.len() == 0 {
         return None;
     }
-    Some(json!({
-        "active_sec": Value::Null,
-        "parts": [],
-        "start": start_iso,
-        "end": utc_iso(now),
-        "kind": "10min",
-        "source": "beayy",
-        "device": beayy_core::local_device(),
-        "title": "进行中",
-        "apps": [],
-        "description": "这一段还没收口，整 10 分钟过后会生成摘要",
-        "memory": "",
-        "context": [],
-        "recording": "",
-        "open": true,
-    }))
+    let events: Vec<Value> = fs::read_to_string(path)
+        .ok()?
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    local_segment_value(start, now, &events, live, true)
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+fn raw_computer_segments(date: NaiveDate, taken: &HashSet<String>, live: Option<&Value>) -> Vec<Value> {
+    let device = timeseen_core::local_device();
+    let dir = data_root().join("devices").join(&device).join("segments");
+    let Ok(entries) = fs::read_dir(dir) else { return vec![] };
+    let now = Utc::now();
+    let mut out = vec![];
+    for entry in entries.filter_map(|e| e.ok()) {
+        let key = entry.file_name().to_string_lossy().to_string();
+        let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&key, "%Y-%m-%dT%H-%M-%SZ") else { continue };
+        let start = Utc.from_utc_datetime(&naive);
+        let end = start + Duration::minutes(10);
+        let local_date = start.with_timezone(&Local).date_naive();
+        let end_date = (end - Duration::milliseconds(1)).with_timezone(&Local).date_naive();
+        if (local_date != date && end_date != date) || end > now || taken.contains(&utc_iso(start)) {
+            continue;
+        }
+        let path = entry.path().join("events.jsonl");
+        let Ok(text) = fs::read_to_string(path) else { continue };
+        let mut events: Vec<Value> = text.lines().filter_map(|line| serde_json::from_str(line).ok()).collect();
+        events.sort_by(|a, b| a["timestamp"].as_str().cmp(&b["timestamp"].as_str()));
+        if let Some(value) = local_segment_value(start, end, &events, live, false) {
+            out.push(value);
+        }
+    }
+    out.sort_by(|a, b| a["start"].as_str().cmp(&b["start"].as_str()));
+    out
+}
+
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn get_day(date: String) -> Value {
     let repo = repo_path();
     let Ok(nd) = NaiveDate::parse_from_str(&date, "%Y-%m-%d") else { return Value::Null };
@@ -1197,13 +1321,24 @@ pub fn get_day(date: String) -> Value {
     } else {
         None
     };
-    let taken: HashSet<String> = own.iter().filter_map(|s| s["start"].as_str().map(String::from)).collect();
+    let own_starts: HashSet<String> = own.iter().filter_map(|s| s["start"].as_str().map(String::from)).collect();
     let mut segs: Vec<Value> = pack.as_ref().map(|p| codex_segments(p, nd)).unwrap_or_default();
-    segs.retain(|s| !taken.contains(s["start"].as_str().unwrap_or("")));
+    segs.retain(|s| !own_starts.contains(s["start"].as_str().unwrap_or("")));
     segs.extend(own);
+    let device = timeseen_core::local_device();
+    let local_starts = |rows: &[Value]| {
+        rows.iter()
+            .filter(|s| s["source"] == "beayy" && s["device"] == device)
+            .filter_map(|s| s["start"].as_str().map(String::from))
+            .collect::<HashSet<_>>()
+    };
+    let covered = local_starts(&segs);
+    let fallback_live = live.clone().or_else(|| live_computer(nd));
+    segs.extend(raw_computer_segments(nd, &covered, fallback_live.as_ref()));
     // 今天当前未收口的 10 分钟段：有采集就挂一条「进行中」，避免用户以为近几分钟丢了
     if date == Local::now().format("%Y-%m-%d").to_string() {
-        if let Some(cur) = open_segment_placeholder(&taken) {
+        let taken = local_starts(&segs);
+        if let Some(cur) = open_segment_placeholder(&taken, live.as_ref()) {
             segs.push(cur);
         }
     }
@@ -1211,10 +1346,14 @@ pub fn get_day(date: String) -> Value {
     let work = work_of(&segs);
     let hours = rollups_of(nd);
     // 别的电脑「不在电脑前」的段不显示（你在这台用着的时候，那台闲着不用列出来）；有几台电脑的摘要，页面就给每行标上是哪台
-    let me = beayy_core::local_device();
-    segs.retain(|s| s["device"].as_str().map(|d| d == me).unwrap_or(true) || s["title"] != beayy_summary::IDLE_TITLE);
+    let me = timeseen_core::local_device();
+    segs.retain(|s| s["device"].as_str().map(|d| d == me).unwrap_or(true) || s["title"] != timeseen_summary::IDLE_TITLE);
     let computers: BTreeSet<String> = segs.iter().filter_map(|s| s["device"].as_str().map(String::from)).collect();
     let segs = merge_idle(segs);
+    #[cfg(not(timeseen_mobile))]
+    let focus = crate::focus_store::read_day(&timeseen_core::data_root(), nd).unwrap_or_else(|e| json!({"error": e}));
+    #[cfg(timeseen_mobile)]
+    let focus = Value::Null;
     json!({
         "date": date,
         "pack": pack,
@@ -1224,10 +1363,11 @@ pub fn get_day(date: String) -> Value {
         "hours": hours,
         "segments": segs,
         "computers": computers,
-        "device_names": beayy_sync::device_names(&beayy_core::data_root()),
+        "device_names": device_names(),
         "phone": phone_day(phone_events().as_slice(), nd, &app_names()),
         "speech": speech_day(nd),
-        "places": places_day(nd),
+        "places": places_day_opt(nd, false),
+        "focus": focus,
     })
 }
 
@@ -1248,7 +1388,7 @@ fn work_of(segs: &[Value]) -> Value {
         for x in parts {
             let v = sec * x["share"].as_f64().unwrap_or(0.0);
             let act = x["activity"].as_str().unwrap_or("其他");
-            let group = beayy_summary::activity_group(act);
+            let group = timeseen_summary::activity_group(act);
             let child = if act == group && act != "其他" { "未细分" } else { act };
             *acts.entry(group.to_string()).or_default().entry(child.to_string()).or_default() += v;
             let pj = x["project"].as_str().unwrap_or("");
@@ -1276,7 +1416,7 @@ fn work_of(segs: &[Value]) -> Value {
 /// 这一天的小时摘要（Beayy/summaries-1h/），项目名按别名表归并
 fn rollups_of(date: NaiveDate) -> Vec<Value> {
     let (s, e) = day_bounds(date);
-    let al = beayy_summary::Summarizer::new(data_root()).aliases();
+    let al = timeseen_summary::Summarizer::new(data_root()).aliases();
     let mut out = vec![];
     for f in fs::read_dir(data_root().join("summaries-1h")).map(|r| r.filter_map(|x| x.ok()).map(|x| x.path()).collect::<Vec<_>>()).unwrap_or_default() {
         let n = f.file_name().unwrap().to_string_lossy().to_string();
@@ -1285,7 +1425,7 @@ fn rollups_of(date: NaiveDate) -> Vec<Value> {
         if t < s.with_timezone(&Utc) || t >= e.with_timezone(&Utc) {
             continue;
         }
-        let fm = beayy_summary::front(&fs::read_to_string(&f).unwrap_or_default());
+        let fm = timeseen_summary::front(&fs::read_to_string(&f).unwrap_or_default());
         let parts: Vec<Value> = fm
             .get("parts")
             .and_then(Value::as_array)
@@ -1311,7 +1451,7 @@ fn rollups_of(date: NaiveDate) -> Vec<Value> {
 
 /// 连续的「不在电脑前」段（自采、首尾相接）合成一段，kind＝idle
 fn merge_idle(segs: Vec<Value>) -> Vec<Value> {
-    let idle = |s: &Value| s["source"] == "beayy" && s["title"] == beayy_summary::IDLE_TITLE;
+    let idle = |s: &Value| s["source"] == "beayy" && s["title"] == timeseen_summary::IDLE_TITLE;
     let mut out: Vec<Value> = Vec::new();
     for s in segs {
         if idle(&s) {
@@ -1322,7 +1462,7 @@ fn merge_idle(segs: Vec<Value>) -> Vec<Value> {
                 }
             }
             out.push(json!({"start": s["start"], "end": s["end"], "kind": "idle", "source": "beayy",
-                "title": beayy_summary::IDLE_TITLE, "description": "", "memory": "", "context": [], "recording": ""}));
+                "title": timeseen_summary::IDLE_TITLE, "description": "", "memory": "", "context": [], "recording": ""}));
         } else {
             out.push(s);
         }
@@ -1330,16 +1470,52 @@ fn merge_idle(segs: Vec<Value>) -> Vec<Value> {
     out
 }
 
+#[cfg(test)]
+mod local_segment_tests {
+    use super::*;
+
+    fn at(text: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(text).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn builds_timeline_row_without_summary_model() {
+        let start = at("2026-11-07T15:30:00Z");
+        let end = start + Duration::minutes(10);
+        let events = vec![
+            json!({"event_type": "presence", "timestamp": "2026-11-07T15:30:00Z", "state": "active", "idle_seconds": 0}),
+            json!({"event_type": "app.activated", "timestamp": "2026-11-07T15:30:01Z", "app_name": "Google Chrome", "bundle_id": "com.google.Chrome", "window_title": "Workbuddy"}),
+            json!({"event_type": "heartbeat", "timestamp": "2026-11-07T15:31:00Z", "app_name": "Google Chrome", "bundle_id": "com.google.Chrome", "state": "active"}),
+        ];
+        let row = local_segment_value(start, end, &events, None, false).unwrap();
+        assert_eq!(row["title"], "Google Chrome");
+        assert_eq!(row["active_sec"], 120);
+        assert_eq!(row["fallback"], true);
+    }
+
+    #[test]
+    fn dock_click_does_not_replace_foreground_app() {
+        let start = at("2026-11-07T15:30:00Z");
+        let end = start + Duration::minutes(10);
+        let events = vec![
+            json!({"event_type": "app.activated", "timestamp": "2026-11-07T15:30:01Z", "app_name": "PyCharm", "bundle_id": "com.jetbrains.pycharm", "window_title": "main.py"}),
+            json!({"event_type": "mouse.click", "timestamp": "2026-11-07T15:39:59Z", "app_name": "程序坞", "bundle_id": "com.apple.dock"}),
+        ];
+        let row = local_segment_value(start, end, &events, None, false).unwrap();
+        assert_eq!(row["title"], "PyCharm");
+    }
+}
+
 fn rules_path() -> PathBuf {
     default_root().join("rules.json")
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn get_rules() -> Value {
     fs::read_to_string(rules_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!([]))
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn save_rules(rules: Value) -> Result<(), String> {
     fs::create_dir_all(default_root()).map_err(|e| e.to_string())?;
     fs::write(rules_path(), serde_json::to_string_pretty(&rules).unwrap()).map_err(|e| e.to_string())
@@ -1350,6 +1526,7 @@ pub fn save_rules(rules: Value) -> Result<(), String> {
 fn todos_path() -> PathBuf {
     default_root().join("todos.json")
 }
+static TODOS_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn memos_path() -> PathBuf {
     default_root().join("memos.json")
@@ -1359,95 +1536,423 @@ fn read_json_array(path: &PathBuf) -> Value {
     fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!([]))
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn get_todos() -> Value {
     read_json_array(&todos_path())
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn save_todos(todos: Value) -> Result<(), String> {
+    let _guard = TODOS_WRITE_LOCK.lock().map_err(|_| "待办暂不可写")?;
     write_json(&todos_path(), &todos)
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+/// 专注回顾只修改最新文件中的这一项，避免用打开专注页时的旧副本覆盖其他待办。
+#[cfg(not(timeseen_mobile))]
+pub(crate) fn complete_focus_todo(id: &str) -> Result<bool, String> {
+    let _guard = TODOS_WRITE_LOCK.lock().map_err(|_| "待办暂不可写")?;
+    let mut todos = get_todos();
+    let Some(item) = todos.as_array_mut().and_then(|xs| xs.iter_mut().find(|x| x["id"].as_str() == Some(id))) else { return Ok(false) };
+    item["done"] = json!(true);
+    item["updated"] = json!(Utc::now().to_rfc3339());
+    write_json(&todos_path(), &todos)?;
+    Ok(true)
+}
+
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn get_memos() -> Value {
     read_json_array(&memos_path())
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn save_memos(memos: Value) -> Result<(), String> {
     write_json(&memos_path(), &memos)
 }
 
+// ---------- 承诺：哪一晚放下了、这周守哪条规矩推进哪个项目、菜单栏今天说过哪些 ----------
+
+fn plan_path() -> PathBuf {
+    default_root().join("plan.json")
+}
+
+pub(crate) fn read_plan() -> Value {
+    let mut v = fs::read_to_string(plan_path()).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()).unwrap_or_else(|| json!({}));
+    if !v.is_object() {
+        v = json!({});
+    }
+    if !v["days"].is_object() {
+        v["days"] = json!({});
+    }
+    if !v["nudges"].is_object() {
+        v["nudges"] = json!({});
+    }
+    v
+}
+
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
+pub fn get_plan() -> Value {
+    read_plan()
+}
+
+/// 只改网页传来的 days、week，菜单栏的 nudges 留在文件里
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
+pub fn save_plan(plan: Value) -> Result<(), String> {
+    let mut cur = read_plan();
+    if let Some(days) = plan.get("days") {
+        cur["days"] = days.clone();
+    }
+    if plan.as_object().map(|o| o.contains_key("week")).unwrap_or(false) {
+        cur["week"] = plan.get("week").cloned().unwrap_or(Value::Null);
+    }
+    write_json(&plan_path(), &cur)
+}
+
+pub fn dismiss_nudge(key: String) -> Result<(), String> {
+    let mut cur = read_plan();
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let mut arr = cur["nudges"][&today].as_array().cloned().unwrap_or_default();
+    if !arr.iter().any(|x| x.as_str() == Some(key.as_str())) {
+        arr.push(json!(key));
+    }
+    cur["nudges"][&today] = json!(arr);
+    write_json(&plan_path(), &cur)
+}
+
+/// 某一天所在的周一到周日：项目小时、每条规矩守住了几天、这周从日总结写成的待办
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
+pub fn get_week(date: Option<String>) -> Value {
+    let day = date.as_deref().and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()).unwrap_or_else(|| Local::now().date_naive());
+    let start = day - Duration::days(day.weekday().num_days_from_monday() as i64);
+    let end = start + Duration::days(6);
+    let today = Local::now().date_naive();
+    let rules = get_rules().as_array().cloned().unwrap_or_default();
+    let mut projects: BTreeMap<String, f64> = BTreeMap::new();
+    let mut marks: Vec<Vec<String>> = rules.iter().map(|_| vec![]).collect();
+    for i in 0..7 {
+        let date = start + Duration::days(i);
+        if date > today {
+            for row in &mut marks {
+                row.push("open".into());
+            }
+            continue;
+        }
+        let dayv = get_day(date.format("%Y-%m-%d").to_string());
+        let live = live_computer(date).unwrap_or_else(|| dayv["live"].clone());
+        let phone = dayv["phone"].clone();
+        for (ri, r) in rules.iter().enumerate() {
+            let mark = if r["enabled"] == false {
+                "off"
+            } else {
+                crate::daily::judge(r["text"].as_str().unwrap_or(""), date, &live, &phone).mark
+            };
+            marks[ri].push(mark.into());
+        }
+        for g in dayv["work"]["domains"].as_array().cloned().unwrap_or_default() {
+            let kids = g["children"].as_array().cloned().unwrap_or_default();
+            if kids.is_empty() {
+                if let Some(name) = g["name"].as_str() {
+                    *projects.entry(name.to_string()).or_default() += g["sec"].as_f64().unwrap_or(0.0);
+                }
+            }
+            for c in kids {
+                if let Some(name) = c["name"].as_str() {
+                    *projects.entry(name.to_string()).or_default() += c["sec"].as_f64().unwrap_or(0.0);
+                }
+            }
+        }
+    }
+    let mut projects: Vec<Value> = projects.into_iter().filter(|(_, s)| *s >= 60.0).map(|(name, sec)| json!({"name": name, "sec": sec.round() as i64})).collect();
+    projects.sort_by(|a, b| b["sec"].as_i64().cmp(&a["sec"].as_i64()));
+    let rules_out: Vec<Value> = rules.iter().enumerate().map(|(i, r)| {
+        let row = &marks[i];
+        let kept = row.iter().filter(|m| *m == "ok" || *m == "warn").count();
+        let total = row.iter().filter(|m| *m == "ok" || *m == "warn" || *m == "miss").count();
+        json!({"id": r["id"], "text": r["text"], "marks": row, "kept": kept, "total": total})
+    }).collect();
+    let start_s = start.format("%Y-%m-%d").to_string();
+    let end_s = end.format("%Y-%m-%d").to_string();
+    let plan = read_plan();
+    let mut items = vec![];
+    for t in get_todos().as_array().cloned().unwrap_or_default() {
+        let from = t["from_date"].as_str().unwrap_or("");
+        if t["source"] == "daily" && from >= start_s.as_str() && from <= end_s.as_str() {
+            items.push(json!({"text": t["text"], "done": t["done"] == true, "dropped": false}));
+        }
+    }
+    if let Some(days) = plan["days"].as_object() {
+        for (date, day) in days {
+            if date.as_str() < start_s.as_str() || date.as_str() > end_s.as_str() {
+                continue;
+            }
+            for text in day["dropped"].as_array().cloned().unwrap_or_default() {
+                items.push(json!({"text": text, "done": false, "dropped": true}));
+            }
+        }
+    }
+    let (cur_live, cur_late, cur_done, cur_undone) = week_stats(start);
+    let prev_start = start - Duration::days(7);
+    let (prev_live, prev_late, prev_done, prev_undone) = week_stats(prev_start);
+    let d = |cur: f64, prev: f64| if prev <= 0.0 { None } else { Some(((cur - prev) / prev * 100.0).round() as i64) };
+    let dpct = |cur: f64, prev: f64| if prev <= 0.0 { None } else { Some(((cur - prev) / prev * 100.0).round() as i64) };
+    let _ = dpct;
+    json!({"start": start_s, "end": end_s, "projects": projects, "rules": rules_out, "items": items,
+        "delta": {
+            "active_pct": d(cur_live, prev_live),
+            "late_pct": d(cur_late, prev_late),
+            "promise_done": cur_done, "promise_undone": cur_undone,
+            "prev_promise_done": prev_done, "prev_promise_undone": prev_undone,
+        }})
+}
+
+/// 这一周的在机、熬夜（21:00 后＋次日 0–5 点）和承诺兑现数，用于和上周对比
+fn week_stats(start: NaiveDate) -> (f64, f64, u64, u64) {
+    let today = Local::now().date_naive();
+    let mut live_sec = 0.0;
+    let mut late_sec = 0.0;
+    let mut done = 0u64;
+    let mut undone = 0u64;
+    for i in 0..7 {
+        let date = start + Duration::days(i);
+        if date > today { continue; }
+        let dayv = get_day(date.format("%Y-%m-%d").to_string());
+        let live = dayv["live"].clone();
+        if !live.is_null() {
+            if let Some(sec) = live["active_sec"].as_f64() { live_sec += sec; }
+            let cut = (day_bounds(date).0 + Duration::hours(21)).with_timezone(&Utc);
+            for x in live["spans"].as_array().cloned().unwrap_or_default() {
+                if let (Some(a), Some(b)) = (x[0].as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok()), x[1].as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok())) {
+                    let a = a.with_timezone(&Utc);
+                    let b = b.with_timezone(&Utc);
+                    let lo = a.max(cut);
+                    if b > lo {
+                        late_sec += (b - lo).num_milliseconds() as f64 / 1000.0;
+                    }
+                }
+            }
+            let nd = date + Duration::days(1);
+            if nd <= today {
+                let dawn_end = (day_bounds(nd).0 + Duration::hours(5)).with_timezone(&Utc);
+                let next_live = live_computer(nd).unwrap_or_else(|| Value::Null);
+                for x in next_live["spans"].as_array().cloned().unwrap_or_default() {
+                    if let (Some(a), Some(b)) = (x[0].as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok()), x[1].as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok())) {
+                        let a = a.with_timezone(&Utc);
+                        let b = b.with_timezone(&Utc).min(dawn_end);
+                        if b > a {
+                            late_sec += (b - a).num_milliseconds() as f64 / 1000.0;
+                        }
+                    }
+                }
+            }
+        }
+        let y = date.format("%Y-%m-%d").to_string();
+        for t in get_todos().as_array().cloned().unwrap_or_default() {
+            if t["source"] == "daily" && t["from_date"].as_str() == Some(y.as_str()) {
+                if t["done"] == true { done += 1; } else { undone += 1; }
+            }
+        }
+    }
+    (live_sec, late_sec, done, undone)
+}
+
 
 /// settings.json 的键沿用 Python 摘要脚本的叫法（summary_model、daily_model、blacklist），对网页换成 COMMANDS.md 的叫法
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn get_settings() -> Value {
     let s = read_settings_raw();
     let get = |k: &str, d: &str| s.get(k).and_then(|v| v.as_str()).filter(|v| !v.is_empty()).unwrap_or(d).to_string();
+    let selected_models = s.get("model_list").and_then(Value::as_array).map(|models| {
+        models.iter().filter_map(Value::as_str).map(str::trim).filter(|model| !model.is_empty())
+            .map(String::from).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>()
+    }).filter(|models| !models.is_empty()).unwrap_or_else(|| vec![get("summary_model", timeseen_core::DEFAULT_MODEL)]);
     json!({
-        "gateway": get("gateway", beayy_core::DEFAULT_GATEWAY),
-        "model_segment": get("summary_model", beayy_core::DEFAULT_MODEL),
-        "model_daily": get("daily_model", &get("summary_model", beayy_core::DEFAULT_MODEL)),
-        "default_gateway": beayy_core::DEFAULT_GATEWAY,
-        "default_model": beayy_core::DEFAULT_MODEL,
-        "transcribe_server": beayy_remote::cloud::transcribe_server(),
-        "default_transcribe_server": beayy_core::DEFAULT_TRANSCRIBE,
-        "speaker_name": beayy_remote::cloud::speaker_name(),
-        "sync_server": crate::sync::server(),
-        "default_sync_server": beayy_sync::DEFAULT_SERVER,
+        "gateway": get("gateway", timeseen_core::DEFAULT_GATEWAY),
+        "model_segment": get("summary_model", timeseen_core::DEFAULT_MODEL),
+        "model_daily": get("daily_model", &get("summary_model", timeseen_core::DEFAULT_MODEL)),
+        "model_list": selected_models,
+        "model_client": get("model_client", "timeseen"),
+        "model_protocol": get("model_protocol", "chat"),
+        "default_gateway": timeseen_core::DEFAULT_GATEWAY,
+        "default_model": timeseen_core::DEFAULT_MODEL,
         "repo_path": get("repo_path", ""),
         "onboarded": s.get("onboarded").and_then(Value::as_bool).unwrap_or(false),
-        // 默认值和采集端一致（beayy-capture 的 DEFAULT_BLOCKLIST）：Windows 按 exe 文件名
+        // 默认值和采集端一致（timeseen-capture 的 DEFAULT_BLOCKLIST）：Windows 按 exe 文件名
         "blocklist": s.get("blacklist").cloned().unwrap_or(if cfg!(target_os = "windows") { json!(["1password"]) } else { json!(["com.1password.1password"]) }),
-        "has_api_key": beayy_summary::api_key_source().is_some(),
-        // 模型用官方的（按账号开通，经同步服务代调）还是自己的网关；没选过的：有自己的密钥算自己的，否则官方
-        "model_mode": s.get("model_mode").and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| if beayy_summary::api_key_source().is_some() { "custom".into() } else { "official".into() }),
-        "api_key_source": beayy_summary::api_key_source(),
-        "relay_server": get("relay_server", ""),
-        "has_relay_token": beayy_core::secret_get(beayy_remote::SECRET).is_some(),
-        "has_amap_key": beayy_core::secret_get(crate::amap::SECRET).is_some(),
-        "map_mode": if crate::amap::official() { "official" } else { "custom" },
-        "has_amap_js": beayy_core::secret_get("amap_js_key").is_some() && beayy_core::secret_get("amap_js_code").is_some(),
+        "has_api_key": timeseen_summary::api_key_source().is_some(),
+        "api_key_source": timeseen_summary::api_key_source(),
+        "personal_homepage_url": get("personal_homepage_url", ""),
+        "ai_enabled": s.get("ai_enabled").and_then(Value::as_bool).unwrap_or(false),
+        "legacy_model_disabled": s.get("model_mode").and_then(Value::as_str) == Some("official"),
+
     })
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn save_settings(settings: Value) -> Result<(), String> {
     let mut s = read_settings_raw();
-    let map = [("gateway", "gateway"), ("model_segment", "summary_model"), ("model_daily", "daily_model"), ("repo_path", "repo_path"), ("blocklist", "blacklist"), ("onboarded", "onboarded"), ("relay_server", "relay_server"), ("sync_server", "sync_server"), ("transcribe_server", "transcribe_server"), ("speaker_name", "speaker_name"), ("model_mode", "model_mode"), ("map_mode", "map_mode")];
-    for (from, to) in map {
-        if let Some(mut v) = settings.get(from).cloned() {
-            // 同步服务器、转写服务填的就是官方的，存成空（官方地址以后变了跟着变）
-            if (from == "sync_server" && v.as_str().map(|x| x.trim_end_matches('/')) == Some(beayy_sync::DEFAULT_SERVER))
-                || (from == "transcribe_server" && v.as_str().map(|x| x.trim_end_matches('/')) == Some(beayy_core::DEFAULT_TRANSCRIBE))
-            {
-                v = json!("");
-            }
-            s.insert(to.into(), v);
+    for name in ["model_client", "model_protocol", "model_list"] {
+        if let Some(value) = settings.get(name) {
+            s.insert(name.into(), value.clone());
         }
     }
+    timeseen_summary::client::ClientOptions::from_settings(&s)?;
+    let map = [("gateway", "gateway"), ("model_segment", "summary_model"), ("model_daily", "daily_model"), ("repo_path", "repo_path"), ("blocklist", "blacklist"), ("onboarded", "onboarded"), ("personal_homepage_url", "personal_homepage_url"), ("ai_enabled", "ai_enabled")];
+    if let Some(url) = settings.get("gateway").and_then(Value::as_str).filter(|x| !x.trim().is_empty()) {
+        timeseen_core::network::validate_model_base(url)?;
+    }
+    if let Some(url) = settings.get("personal_homepage_url").and_then(Value::as_str).filter(|x| !x.is_empty()) {
+        if !url.starts_with("https://") { return Err("个人主页地址需为 https:// 链接".into()); }
+    }
+    for (from, to) in map { if let Some(v) = settings.get(from) { s.insert(to.into(), v.clone()); } }
+    if settings.get("gateway").is_some() { s.insert("model_mode".into(), json!("custom")); }
     fs::create_dir_all(default_root()).map_err(|e| e.to_string())?;
     fs::write(settings_path(), serde_json::to_string_pretty(&Value::Object(s)).unwrap()).map_err(|e| e.to_string())
 }
 
-/// 存密钥：macOS 进钥匙串，Windows 写数据目录里的文件（见 beayy_summary::store_api_key）；不回传网页
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+/// 存密钥：macOS 进钥匙串，Windows 写数据目录里的文件（见 timeseen_summary::store_api_key）；不回传网页
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn set_api_key(key: String) -> Result<(), String> {
-    beayy_summary::store_api_key(key.trim())
+    timeseen_summary::store_api_key(key.trim())
 }
 
-/// 存录音服务器（手表对话、iPhone 停留点）的口令：macOS 进钥匙串，Windows 写数据目录；不回传网页。空字符串＝删掉
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
-pub fn set_relay_token(token: String) -> Result<(), String> {
-    beayy_core::secret_set(beayy_remote::SECRET, token.trim())
+fn typed_gateway(gateway: &str, key: &str) -> Result<(String, String), String> {
+    let raw = read_settings_raw();
+    let gateway = if gateway.trim().is_empty() {
+        raw.get("gateway").and_then(Value::as_str).filter(|v| !v.is_empty()).unwrap_or(timeseen_core::DEFAULT_GATEWAY).to_string()
+    } else {
+        gateway.to_string()
+    };
+    let gateway = model_gateway_base(&gateway)?;
+    let key = if key.trim().is_empty() { timeseen_summary::api_key_value()? } else { key.trim().to_string() };
+    Ok((gateway, format!("Bearer {key}")))
 }
+
+fn model_gateway_base(gateway: &str) -> Result<String, String> {
+    timeseen_core::network::validate_model_base(gateway)
+}
+
+fn llm_agent() -> ureq::Agent {
+    timeseen_summary::client::agent(std::time::Duration::from_secs(30))
+}
+
+fn model_client_options(client: Option<String>, protocol: Option<String>) -> Result<timeseen_summary::client::ClientOptions, String> {
+    let mut settings = read_settings_raw();
+    if let Some(client) = client { settings.insert("model_client".into(), json!(client)); }
+    if let Some(protocol) = protocol { settings.insert("model_protocol".into(), json!(protocol)); }
+    timeseen_summary::client::ClientOptions::from_settings(&settings)
+}
+
+fn model_error_message(value: &Value) -> Option<&str> {
+    value["error"]["message"].as_str().or_else(|| value["error"].as_str())
+        .or_else(|| value["message"].as_str()).or_else(|| value["detail"].as_str())
+        .filter(|message| !message.trim().is_empty())
+}
+
+fn model_http_error(status: u16, body: &[u8], auth: &str) -> String {
+    let value = serde_json::from_slice::<Value>(body).ok();
+    let message = value.as_ref().and_then(model_error_message).unwrap_or("");
+    let message = message.replace(auth.trim_start_matches("Bearer "), "[密钥]");
+    let message = message.chars().take(400).collect::<String>();
+    if message.is_empty() { format!("HTTP {status}") } else { format!("HTTP {status} · {message}") }
+}
+
+fn model_ids(value: &Value) -> Result<Vec<String>, String> {
+    let rows = value["data"].as_array().ok_or_else(|| model_error_message(value).unwrap_or("网关未返回 data 模型列表").to_string())?;
+    Ok(rows.iter().filter_map(|row| row["id"].as_str()).map(str::trim).filter(|id| !id.is_empty())
+        .map(String::from).collect::<BTreeSet<_>>().into_iter().collect())
+}
+
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
+pub fn list_models(gateway: String, key: String, client: Option<String>, protocol: Option<String>) -> Result<Vec<String>, String> {
+    let (gateway, auth) = typed_gateway(&gateway, &key)?;
+    let options = model_client_options(client, protocol)?;
+    let session = timeseen_summary::client::session_id();
+    let agent = llm_agent();
+    let mut models = BTreeSet::new();
+    let mut cursors = HashSet::new();
+    let mut url = format!("{gateway}/models");
+    for _ in 0..100 {
+        let mut request = agent.get(&url).header("Authorization", &auth);
+        for (name, value) in options.headers(&session) { request = request.header(name, value); }
+        let mut response = request.call()
+            .map_err(|e| format!("连不上网关：{e}"))?;
+        if !response.status().is_success() {
+            return Err(model_http_error(response.status().as_u16(), &response.body_mut().with_config().limit(65536).read_to_vec().unwrap_or_default(), &auth));
+        }
+        let value: Value = response.body_mut().with_config().limit(8 * 1024 * 1024).read_json().map_err(|e| format!("网关模型列表不是有效 JSON：{e}"))?;
+        models.extend(model_ids(&value).map_err(|error| error.replace(auth.trim_start_matches("Bearer "), "[密钥]"))?);
+        if value["has_more"] != true {
+            let mut models: Vec<_> = models.into_iter().collect();
+            models.sort_by_cached_key(|id| id.to_lowercase());
+            return Ok(models);
+        }
+        let cursor = value["last_id"].as_str().or_else(|| value["data"].as_array()?.last()?["id"].as_str())
+            .filter(|cursor| !cursor.is_empty()).ok_or("网关声明还有模型，但没有返回下一页游标")?;
+        if !cursors.insert(cursor.to_string()) {
+            return Err("网关返回了重复的分页游标，请检查模型列表接口".into());
+        }
+        let cursor: String = cursor.bytes().map(|byte| format!("%{byte:02X}")).collect();
+        url = format!("{gateway}/models?after_id={cursor}&limit=100");
+    }
+    Err("模型列表超过 100 页，请检查网关的分页返回".into())
+}
+
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
+pub fn test_models(gateway: String, key: String, models: Vec<String>, client: Option<String>, protocol: Option<String>) -> Result<Vec<Value>, String> {
+    let models: BTreeSet<_> = models.iter().map(|model| model.trim()).filter(|model| !model.is_empty()).collect();
+    if models.is_empty() || models.len() > 32 {
+        return Err("每次请选择 1–32 个模型测试".into());
+    }
+    let (gateway, auth) = typed_gateway(&gateway, &key)?;
+    let options = model_client_options(client, protocol)?;
+    let mut out = Vec::new();
+    for model in models {
+        let started = std::time::Instant::now();
+        let result = timeseen_summary::client::ask_json(&gateway, &auth, model, "只返回一个 JSON 对象：{\"ok\": true}", "测试连接", options, std::time::Duration::from_secs(30));
+        let entry = match result {
+            Ok(_) => json!({"model": model, "ok": true, "ms": started.elapsed().as_millis() as u64}),
+            Err(error) => json!({"model": model, "ok": false, "ms": started.elapsed().as_millis() as u64, "error": error}),
+        };
+        out.push(entry);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod model_connection_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_local_gateway_and_normalizes_copied_endpoint() {
+        assert_eq!(model_gateway_base(" http://127.0.0.1:3425/v1/chat/completions/ ").unwrap(), "http://127.0.0.1:3425/v1");
+        assert_eq!(model_gateway_base("https://example.com/api/v4/models").unwrap(), "https://example.com/api/v4");
+        for address in ["example.com", "file:///tmp/models", "https://user:password@example.com/v1", "https://example.com/v1?key=test", "https://example.com/v1#models"] {
+            assert!(model_gateway_base(address).is_err(), "accepted invalid gateway: {address}");
+        }
+    }
+
+    #[test]
+    fn lists_all_ids_without_duplicates_and_rejects_error_payloads() {
+        let value = json!({"data": [{"id": "model-b"}, {"id": "model-a"}, {"id": "model-b"}, {"id": ""}, {"name": "not-an-id"}]});
+        assert_eq!(model_ids(&value).unwrap(), vec!["model-a", "model-b"]);
+        assert!(model_ids(&json!({"data": []})).unwrap().is_empty());
+        assert_eq!(model_ids(&json!({"error": {"message": "key expired"}})).unwrap_err(), "key expired");
+    }
+
+    #[test]
+    fn preserves_http_error_details_without_returning_the_key() {
+        let body = br#"{"error":{"message":"invalid key test-secret"}}"#;
+        assert_eq!(model_http_error(401, body, "Bearer test-secret"), "HTTP 401 · invalid key [密钥]");
+        assert_eq!(model_http_error(502, b"<html>bad gateway</html>", "Bearer test-secret"), "HTTP 502");
+    }
+}
+
+
 
 // ---------- 删除记录 ----------
 
 /// 删掉本机电脑事件里某时刻之后的记录，连同这些分段的 10 分钟摘要（摘要下一轮按剩下的事件重写）。
 /// 只动本机这台电脑的事件（同步来的别的设备不动）；iPhone 记录、已经归档进仓库 raw/ 的不动。返回删掉的条数
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, String> {
     let from: DateTime<Utc> = if today == Some(true) {
         day_bounds(Local::now().date_naive()).0.with_timezone(&Utc)
@@ -1458,7 +1963,7 @@ pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, 
     let mut removed = 0;
     let mut touched: Vec<String> = vec![];
     let Ok(devs) = fs::read_dir(data_root().join("devices")) else { return Ok(0) };
-    let me = beayy_core::local_device();
+    let me = timeseen_core::local_device();
     for dev in devs.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy() == me.as_str()) {
         let Ok(segs) = fs::read_dir(dev.path().join("segments")) else { continue };
         for seg in segs.filter_map(|e| e.ok()) {
@@ -1507,7 +2012,7 @@ pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, 
 /// 或往回翻了 48 个分段（8 小时）就停，不全量扫。before＝只要这个时刻以前的（「加载更早」接着读）；
 /// types＝只要这些种类，以「.」结尾的按前缀算（keyboard. 包含 keyboard.text_input、keyboard.submit……）。
 /// 打的字、界面文字原样返回（采集时密码框已经打码），只给本机界面看，不进网站
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn recent_events(device: String, before: Option<String>, limit: Option<usize>, types: Option<Vec<String>>) -> Result<Value, String> {
     if device.is_empty() || !device.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("设备编号不对".into());
@@ -1516,7 +2021,7 @@ pub fn recent_events(device: String, before: Option<String>, limit: Option<usize
     let types = types.unwrap_or_default();
     let want = |t: &str| types.is_empty() || types.iter().any(|x| if x.ends_with('.') { t.starts_with(x.as_str()) } else { t == x });
     let before_t = before.as_deref().and_then(|b| DateTime::parse_from_rfc3339(b).ok()).map(|t| t.with_timezone(&Utc));
-    let top = before_t.map(beayy_core::segment_key);
+    let top = before_t.map(timeseen_core::segment_key);
     let Ok(rd) = fs::read_dir(data_root().join("devices").join(&device).join("segments")) else {
         return Ok(json!({ "events": [], "more": false }));
     };
@@ -1555,7 +2060,7 @@ pub fn recent_events(device: String, before: Option<String>, limit: Option<usize
 }
 
 /// 数据目录里的每台设备（devices/<设备>/）：种类、是不是本机、记录从哪天开始、最近一条、条数、占用空间。缓存 60 秒
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn list_devices() -> Vec<Value> {
     let mut g = DEV_CACHE.lock().unwrap();
     if let Some((t, v)) = g.as_ref() {
@@ -1568,20 +2073,34 @@ pub fn list_devices() -> Vec<Value> {
     v
 }
 
+pub fn device_names() -> BTreeMap<String, String> {
+    let root=default_root();let mut paths=vec![root.join("device_names.json")];
+    if let Ok(entries)=fs::read_dir(root.join("devices")){paths.extend(entries.flatten().map(|d|d.path().join("device_names.json")));}
+    let mut best:BTreeMap<String,(i64,String)>=BTreeMap::new();
+    for path in paths {
+        let value:Value=fs::read_to_string(path).ok().and_then(|s|serde_json::from_str(&s).ok()).unwrap_or(json!({}));
+        if let Some(rows)=value.as_object(){for(id,value)in rows{let at=value["at"].as_i64().unwrap_or(i64::MAX);let name=value.as_str().or_else(||value["name"].as_str()).unwrap_or("");if best.get(id).map(|v|at>=v.0).unwrap_or(true){best.insert(id.clone(),(at,name.into()));}}}
+    }
+    best.into_iter().filter(|(_,(_,name))|!name.is_empty()).map(|(id,(_,name))|(id,name)).collect()
+}
+
 static DEV_CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<Value>)>> = std::sync::Mutex::new(None);
 
-/// 给设备改名（空＝改回默认名），会同步到别的设备
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+/// 给设备改名（空＝改回默认名），只写本机
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn rename_device(id: String, name: String) -> Result<(), String> {
-    beayy_sync::rename_device(&beayy_core::data_root(), &id, &name)?;
+    if name.chars().count() > 40 { return Err("设备名称最多 40 字".into()); }
+    let mut names = device_names();
+    if name.trim().is_empty() { names.remove(&id); } else { names.insert(id, name.trim().to_string()); }
+    write_json(&default_root().join("device_names.json"), &json!(names))?;
     *DEV_CACHE.lock().unwrap() = None;
     Ok(())
 }
 
 fn read_devices() -> Vec<Value> {
-    let custom = beayy_sync::device_names(&beayy_core::data_root());
-    let me = beayy_core::local_device();
-    let synced = beayy_sync::remote_set(&beayy_core::data_root());
+    let custom = device_names();
+    let me = timeseen_core::local_device();
+
     let mut out = vec![];
     let Ok(devs) = fs::read_dir(data_root().join("devices")) else { return out };
     let mut devs: Vec<_> = devs.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).collect();
@@ -1625,7 +2144,7 @@ fn read_devices() -> Vec<Value> {
         };
         let name = custom.get(&id).cloned().unwrap_or_else(|| default_name.clone());
         out.push(json!({
-            "synced": synced.contains(&id),
+
             "id": id, "kind": kind, "name": name, "default_name": default_name, "custom": custom.contains_key(&id), "this": id == me,
             "first": first.map(utc_iso), "last": last.map(utc_iso),
             "events": events, "bytes": bytes,
@@ -1638,15 +2157,12 @@ fn read_devices() -> Vec<Value> {
 
 // ---------- 头像和名称 ----------
 
-/// 本机存的显示名称和头像（settings.json 的 profile_*）；没设名称时用账号邮箱 @ 前面那段，再没有就「我」
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+/// 本机存的显示名称和头像（settings.json 的 profile_*）；未设置名称时显示「我」。
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn get_profile() -> Value {
     let s = read_settings_raw();
-    let email = beayy_sync::load(&beayy_core::data_root()).and_then(|a| a.email);
-    let name = s.get("profile_name").and_then(Value::as_str).filter(|x| !x.is_empty()).map(String::from)
-        .or_else(|| email.as_ref().map(|e| e.split('@').next().unwrap_or("").to_string()))
-        .unwrap_or_else(|| "我".into());
-    json!({"name": name, "avatar": s.get("profile_avatar").cloned().unwrap_or(Value::Null), "email": email})
+    let name = s.get("profile_name").and_then(Value::as_str).filter(|x| !x.is_empty()).unwrap_or("我");
+    json!({"name": name, "avatar": s.get("profile_avatar").cloned().unwrap_or(Value::Null)})
 }
 
 pub fn write_profile(name: &str, avatar: Option<&str>, updated: i64) -> Result<(), String> {
@@ -1658,12 +2174,8 @@ pub fn write_profile(name: &str, avatar: Option<&str>, updated: i64) -> Result<(
     fs::write(settings_path(), serde_json::to_string_pretty(&Value::Object(s)).unwrap()).map_err(|e| e.to_string())
 }
 
-pub fn profile_updated() -> i64 {
-    read_settings_raw().get("profile_updated").and_then(Value::as_i64).unwrap_or(0)
-}
-
-/// 改名称和头像：先存本机；登录着就同时存到账号上（换设备登录也是这个头像和名字）
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+/// 名称和头像只保存在本机。
+#[cfg_attr(not(timeseen_mobile), tauri::command)]
 pub async fn save_profile(name: String, avatar: Option<String>) -> Result<(), String> {
     if let Some(a) = &avatar {
         if !a.starts_with("data:image/") || a.len() > 300_000 {
@@ -1671,21 +2183,16 @@ pub async fn save_profile(name: String, avatar: Option<String>) -> Result<(), St
         }
     }
     let name: String = name.trim().chars().take(40).collect();
-    let root = beayy_core::data_root();
-    let updated = if beayy_sync::load(&root).map(|a| a.email.is_some()).unwrap_or(false) {
-        beayy_sync::set_profile(&root, &name, avatar.as_deref())?
-    } else {
-        Utc::now().timestamp_millis()
-    };
+    let updated = Utc::now().timestamp_millis();
     write_profile(&name, avatar.as_deref(), updated)
 }
 
 // ---------- 项目（领域 · 项目） ----------
 
 /// 所有出现过的项目：规范名、领域、累计时长、最近一次、被合并进来的别名
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn list_projects() -> Vec<Value> {
-    let sm = beayy_summary::Summarizer::new(data_root());
+    let sm = timeseen_summary::Summarizer::new(data_root());
     let aliases = sm.aliases();
     let mut agg: BTreeMap<String, (String, f64, String)> = BTreeMap::new();
     for segs in self_segments().into_values() {
@@ -1716,30 +2223,19 @@ pub fn list_projects() -> Vec<Value> {
     out
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn merge_project(from: String, into: String) -> Result<(), String> {
-    beayy_summary::Summarizer::new(data_root()).merge_project(&from, &into)
+    timeseen_summary::Summarizer::new(data_root()).merge_project(&from, &into)
 }
 
-#[cfg_attr(not(beayy_mobile), tauri::command(async))]
+#[cfg_attr(not(timeseen_mobile), tauri::command(async))]
 pub fn set_project_domain(project: String, domain: String) -> Result<(), String> {
-    beayy_summary::Summarizer::new(data_root()).set_project_domain(&project, &domain)
+    timeseen_summary::Summarizer::new(data_root()).set_project_domain(&project, &domain)
 }
 
-/// 首次引导里「测试一下」：用现在的网关、模型、密钥问一句
-/// 官方服务（模型、转写、地图）在这个账号上开通了没有、本月各用了多少：
-/// {plan: null|"official"|"stopped", month, llm: {used, quota}, asr: {used, quota}（秒）, map: {used, quota}（次）}；没登录返回 {error}
-#[cfg_attr(not(beayy_mobile), tauri::command)]
-pub async fn llm_status() -> Value {
-    match beayy_sync::account(&beayy_core::data_root()) {
-        Ok(a) => a.get("services").cloned().unwrap_or(json!({"plan": null})),
-        Err(e) => json!({"error": e}),
-    }
-}
-
-#[cfg_attr(not(beayy_mobile), tauri::command)]
+#[cfg_attr(not(timeseen_mobile), tauri::command)]
 pub async fn test_model() -> Result<(), String> {
-    beayy_summary::Summarizer::new(default_root()).ask("只返回一个 JSON 对象：{\"ok\": true}", "测试连接").map(|_| ())
+    timeseen_summary::Summarizer::new(default_root()).ask("只返回一个 JSON 对象：{\"ok\": true}", "测试连接").map(|_| ())
 }
 
 /// 还没做过首次引导（主窗口启动时直接打开）
