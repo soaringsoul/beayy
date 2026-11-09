@@ -1,24 +1,24 @@
-// Beayy（Be Authentic. Your Yesterdays.）Tauri 2 外壳。
+// 时见 TimeSeen · 看见时间，看见自己。 · 人文帮出品。
 // 菜单栏标志＋菜单、主窗口（网页四页，app/ui/）、给网页的命令（清单见 COMMANDS.md）、后台定时任务。
-// 采集（键鼠、界面文字、在场）在 beayy-capture 里，由这里启动；macOS 和 Windows 记的事件相同。
+// 采集（键鼠、界面文字、在场）在 timeseen-capture 里，由这里启动；macOS 和 Windows 记的事件相同。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod amap;
+mod archive;
 mod storage;
 mod daily;
 mod data;
 mod icons;
+mod focus;
+mod focus_store;
 mod mcp;
 mod summarizer;
-mod sync;
-mod update;
 #[cfg(target_os = "macos")]
 mod devhook;
 
-use beayy_core::{data_root, fields, local_device, shadow_mode, EventLog};
-use beayy_phone::PhoneSync;
-use beayy_remote::Relay;
+use timeseen_core::{data_root, fields, local_device, shadow_mode, EventLog};
+use timeseen_phone::PhoneSync;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -28,17 +28,11 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
-const PRODUCT: &str = "Be Authentic. Your Yesterdays.";
+const PRODUCT: &str = timeseen_core::PRODUCT;
 const PHONE_EVERY: Duration = Duration::from_secs(300);
-/// 手表对话、iPhone 停留点：每 2 分钟一轮（账号同步的列表接口便宜，停留点早点到）
-const RELAY_EVERY: Duration = Duration::from_secs(120);
-
 struct AppState {
     log: Arc<EventLog>,
     phone: Mutex<PhoneSync>,
-    relay: Mutex<Relay>,
-    /// 录音和停留点走账号同步的上一轮结果（设置「连接」和「数据」页显示）
-    cloud: Mutex<String>,
     paused: Arc<AtomicBool>,
     /// 定时暂停到这个时刻自动继续；None＝一直暂停（或没暂停）
     paused_until: Mutex<Option<chrono::DateTime<chrono::Utc>>>,
@@ -53,7 +47,7 @@ fn events_today(state: &AppState) -> u64 {
     let mut g = state.today_base.lock().unwrap();
     if g.map(|(d, _, _)| d != today).unwrap_or(true) {
         let start = Local.from_local_datetime(&today.and_hms_opt(0, 0, 0).unwrap()).unwrap().with_timezone(&Utc);
-        let first = beayy_core::segment_key(start);
+        let first = timeseen_core::segment_key(start);
         let mut n = 0u64;
         if let Ok(it) = std::fs::read_dir(state.log.segments_dir()) {
             for seg in it.filter_map(|e| e.ok()) {
@@ -69,14 +63,14 @@ fn events_today(state: &AppState) -> u64 {
 }
 
 /// 权限查询要查 TCC／起 codesign 子进程，界面切页、开机自检会连着调：缓存 1.5 秒（引导页每 2 秒轮询，授权后最多晚一次）
-fn permissions_cached() -> beayy_capture::PermissionStatus {
-    static C: std::sync::Mutex<Option<(std::time::Instant, beayy_capture::PermissionStatus)>> = std::sync::Mutex::new(None);
+fn permissions_cached() -> timeseen_capture::PermissionStatus {
+    static C: std::sync::Mutex<Option<(std::time::Instant, timeseen_capture::PermissionStatus)>> = std::sync::Mutex::new(None);
     if let Some((t, p)) = C.lock().unwrap().as_ref() {
         if t.elapsed() < Duration::from_millis(1500) {
             return p.clone();
         }
     }
-    let p = beayy_capture::permissions();
+    let p = timeseen_capture::permissions();
     *C.lock().unwrap() = Some((std::time::Instant::now(), p.clone()));
     p
 }
@@ -92,20 +86,18 @@ fn get_status(state: tauri::State<'_, Arc<AppState>>) -> Result<Value, String> {
         "events_today": events_today(&state),
         "login_item": login_item(),
         "phone_sync": state.phone.lock().unwrap().last_summary.clone(),
-        "relay_sync": state.relay.lock().unwrap().last_summary.clone(),
-        "cloud_sync": state.cloud.lock().unwrap().clone(),
         "device": state.log.device,
         "version": env!("CARGO_PKG_VERSION"),
         "shadow": shadow_mode(),
-        "perf": std::env::var("BEAYY_PERF").ok(),
+        "perf": std::env::var("TIMESEEN_PERF").ok(),
     }))
 }
 
 fn capturing() -> bool {
     #[cfg(target_os = "macos")]
-    return beayy_capture::macos::capturing();
+    return timeseen_capture::macos::capturing();
     #[cfg(target_os = "windows")]
-    return beayy_capture::windows::capturing();
+    return timeseen_capture::windows::capturing();
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     return true;
 }
@@ -122,7 +114,7 @@ fn set_paused(paused: bool, minutes: Option<i64>, state: tauri::State<'_, Arc<Ap
 
 fn login_item() -> bool {
     #[cfg(target_os = "macos")]
-    return beayy_capture::macos::login_item_enabled();
+    return timeseen_capture::macos::login_item_enabled();
     #[cfg(not(target_os = "macos"))]
     return false;
 }
@@ -137,7 +129,7 @@ fn quit_app(app: AppHandle) {
 #[tauri::command]
 fn set_login_item(on: bool) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    return beayy_capture::macos::set_login_item(on);
+    return timeseen_capture::macos::set_login_item(on);
     #[cfg(not(target_os = "macos"))]
     return if on { Err("这个系统上还不支持".into()) } else { Ok(()) };
 }
@@ -170,7 +162,7 @@ fn open_permission(kind: String) {
         let _ = std::process::Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.Screen-Time-Settings.extension").spawn();
         return;
     }
-    beayy_capture::open_permission(&kind);
+    timeseen_capture::open_permission(&kind);
 }
 
 /// 「现在读取」：iPhone 屏幕使用时间不等 5 分钟，马上读一次
@@ -196,7 +188,7 @@ fn open_main(app: &AppHandle) {
         return;
     }
     let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title(if shadow_mode() { "Beayy 测试版" } else { PRODUCT })
+        .title(if shadow_mode() { "时见 测试版" } else { PRODUCT })
         .inner_size(1180.0, 760.0)
         .min_inner_size(760.0, 520.0);
     // 墨线约定：标题栏并进侧栏顶部，系统窗口按钮叠在侧栏左上角（页面让出 72 像素）
@@ -206,7 +198,7 @@ fn open_main(app: &AppHandle) {
 }
 
 fn permission_line() -> String {
-    let p = beayy_capture::permissions();
+    let p = timeseen_capture::permissions();
     let mark = |b: bool| if b { "✓" } else { "✗" };
     format!(
         "辅助功能 {} · 输入监控 {} · 完全磁盘访问 {}",
@@ -216,18 +208,13 @@ fn permission_line() -> String {
     )
 }
 
-/// 菜单栏图标旁的「!」：缺权限或监听没装上
-fn tray_ok() -> bool {
-    let p = beayy_capture::permissions();
-    p.accessibility && p.input_monitoring && p.full_disk_access && capturing()
-}
-
 /// 退出前把正在打的字落盘、记 app.quit。菜单「退出」和系统发来的退出（关机、osascript quit）都走 RunEvent::Exit
 fn on_exit(app: &AppHandle) {
+    if let Some(s) = app.try_state::<Arc<focus::Service>>() { s.shutdown(); }
     #[cfg(target_os = "macos")]
-    beayy_capture::macos::shutdown();
+    timeseen_capture::macos::shutdown();
     #[cfg(target_os = "windows")]
-    beayy_capture::windows::shutdown();
+    timeseen_capture::windows::shutdown();
     if let Some(s) = app.try_state::<Arc<AppState>>() {
         s.log.write("app.quit", fields! {}, None);
     }
@@ -254,7 +241,7 @@ fn single_instance() -> Result<Option<std::fs::File>, ()> {
 }
 
 fn main() {
-    // 调试用：beayy --dump list_days｜get_day YYYY-MM-DD｜get_settings｜get_rules，打印命令结果后退出（不启动界面）
+    // 调试用：timeseen --dump list_days｜get_day YYYY-MM-DD｜get_settings｜get_rules，打印命令结果后退出（不启动界面）
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|a| a == "--summarize-once").unwrap_or(false) {
         // 调试用：立刻跑一次 10 分钟摘要调度（同定时任务，含锁文件），完成后退出
@@ -265,9 +252,6 @@ fn main() {
         // 本机 MCP 服务（标准输入输出），给本机 AI 读记录
         mcp::serve();
         return;
-    }
-    if let Some(code) = sync::cli(&args) {
-        std::process::exit(code);
     }
     if args.get(1).map(|a| a == "--daily").unwrap_or(false) {
         // 调试用：写某天的日总结（默认今天）并打印
@@ -280,7 +264,7 @@ fn main() {
     }
     if args.get(1).map(|a| a == "--summary-tag").unwrap_or(false) {
         // 一次性：给还没有「类型＋项目」标签的旧摘要补上，再生成缺的小时摘要
-        let sm = beayy_summary::Summarizer::new(beayy_core::default_root());
+        let sm = timeseen_summary::Summarizer::new(timeseen_core::default_root());
         let n = sm.tag_backfill(|l| println!("{l}"));
         sm.update_aliases(|l| println!("{l}"));
         let m = sm.rollups(|l| println!("{l}"));
@@ -289,62 +273,21 @@ fn main() {
     }
     if args.get(1).map(|a| a == "--summary-redo-idle").unwrap_or(false) {
         // 一次性：已写过的「整段不在电脑前」摘要换成固定版（不调模型）
-        let n = beayy_summary::Summarizer::new(beayy_core::default_root()).redo_idle();
+        let n = timeseen_summary::Summarizer::new(timeseen_core::default_root()).redo_idle();
         println!("换掉 {n} 段");
         return;
     }
     if args.get(1).map(|a| a == "--summary-pack").unwrap_or(false) {
         // 调试用：打印某分段拼好的摘要包（不调模型）
-        let sm = beayy_summary::Summarizer::new(beayy_core::default_root());
+        let sm = timeseen_summary::Summarizer::new(timeseen_core::default_root());
         for name in &args[2..] {
             println!("===== {name} =====\n{}\n", sm.dry_run(name));
         }
         return;
     }
-    if args.get(1).map(|a| a == "--relay-pull").unwrap_or(false) {
-        // 调试用：从录音服务器拉一轮手表对话和停留点
-        let mut r = Relay::default();
-        match r.pull(&data_root()) {
-            Ok(n) => println!("拉了 {} 天，新增 {} 条（{}）", n.days, n.added, r.last_summary),
-            Err(e) => eprintln!("{e}"),
-        }
-        return;
-    }
-    // 调试和迁移：beayy --sync-put <设备> <块名> <文件>，把本地文件加密后放到同步服务；--sync-delete <设备> <块名>；beayy --ticket-file <文件>，把转写票据写进文件（1 小时有效，不打印）
-    if args.get(1).map(|a| a == "--sync-put").unwrap_or(false) {
-        let (d, n, f) = (args.get(2).cloned().unwrap_or_default(), args.get(3).cloned().unwrap_or_default(), args.get(4).cloned().unwrap_or_default());
-        let r = std::fs::read(&f).map_err(|e| e.to_string()).and_then(|b| beayy_sync::put_named(&data_root(), &d, &n, &b));
-        println!("{}", r.map(|_| "已传".to_string()).unwrap_or_else(|e| e));
-        return;
-    }
-    if args.get(1).map(|a| a == "--sync-delete").unwrap_or(false) {
-        let (d, n) = (args.get(2).cloned().unwrap_or_default(), args.get(3).cloned().unwrap_or_default());
-        println!("{}", beayy_sync::delete_named(&data_root(), &d, &n).map(|_| "已删".to_string()).unwrap_or_else(|e| e));
-        return;
-    }
-    if args.get(1).map(|a| a == "--ticket-file").unwrap_or(false) {
-        let r = beayy_sync::ticket(&data_root()).and_then(|(t, _)| std::fs::write(args.get(2).cloned().unwrap_or_default(), t).map_err(|e| e.to_string()));
-        println!("{}", r.map(|_| "已写".to_string()).unwrap_or_else(|e| e));
-        return;
-    }
-    if args.get(1).map(|a| a == "--relay-import").unwrap_or(false) {
-        // 调试用：beayy --relay-import transcripts|places <文件>，把本地 jsonl 当成服务器上的数据写进去
-        let (kind, file) = (args.get(2).cloned().unwrap_or_default(), args.get(3).cloned().unwrap_or_default());
-        match Relay::default().import_file(&data_root(), &kind, std::path::Path::new(&file)) {
-            Ok(n) => println!("新增 {n} 条"),
-            Err(e) => eprintln!("{e}"),
-        }
-        return;
-    }
-    if args.get(1).map(|a| a == "--set-relay-token").unwrap_or(false) {
-        // 从标准输入读录音服务器口令存进钥匙串（不经命令行参数，免得留在 shell 历史里）
-        let mut t = String::new();
-        let _ = std::io::stdin().read_line(&mut t);
-        match beayy_core::secret_set(beayy_remote::SECRET, t.trim()) {
-            Ok(()) => println!("已存"),
-            Err(e) => eprintln!("{e}"),
-        }
-        return;
+    if let Some(action) = args.get(1).map(String::as_str).filter(|a| matches!(*a, "--export-local" | "--import-local")) {
+        let result = args.get(2).ok_or_else(|| "需要本地文件路径".to_string()).and_then(|p| if action=="--export-local" { archive::export_to(std::path::Path::new(p)) } else { archive::import_from(std::path::Path::new(p)) });
+        match result { Ok(v)=>println!("{v}"),Err(e)=>{eprintln!("{e}");std::process::exit(1);} } return;
     }
     if args.get(1).map(|a| a == "--dump").unwrap_or(false) {
         let out = match args.get(2).map(String::as_str) {
@@ -352,23 +295,16 @@ fn main() {
             Some("get_day") => data::get_day(args.get(3).cloned().unwrap_or_default()),
             Some("get_settings") => data::get_settings(),
             Some("get_rules") => data::get_rules(),
+            Some("get_todos") => data::get_todos(),
+            Some("storage_root") => json!(data_root()),
             Some("list_devices") => json!(data::list_devices()),
             Some("list_projects") => json!(data::list_projects()),
             Some("get_profile") => data::get_profile(),
-            Some("sync_status") => sync::sync_status(),
-            Some("permissions") => json!(beayy_capture::permissions()),
+            Some("permissions") => json!(timeseen_capture::permissions()),
             Some("recent_events") => data::recent_events(args.get(3).cloned().unwrap_or_default(), None, Some(5), None).unwrap_or_else(|e| json!({ "error": e })),
             Some("place_stats") => data::place_stats(None),
-            Some("cloud_round") => match beayy_remote::cloud::round(&mut Relay::default(), &data_root(), Duration::from_secs(600)) {
-                Ok(n) => json!({"added": n.added, "places": n.places, "transcribed": n.transcribed, "fetched": n.fetched, "deleted": n.deleted, "waiting": n.waiting, "errors": n.errors}),
-                Err(e) => json!({"error": e}),
-            },
             Some("storage_stats") => tauri::async_runtime::block_on(storage::storage_stats()),
             Some("test_model") => json!(tauri::async_runtime::block_on(data::test_model()).map(|_| "通了".to_string()).unwrap_or_else(|e| e)),
-            Some("amap_search") => amap::amap_search(args.get(3).cloned().unwrap_or_default(), Some(32.0475), Some(118.9215)).map(|v| json!(v.len())).unwrap_or_else(|e| json!({ "error": e })),
-            Some("amap_js") => tauri::async_runtime::block_on(amap::amap_js_config()).as_object().map(|o| json!(o.keys().collect::<Vec<_>>())).unwrap_or(json!(null)),
-            Some("sync_usage") => beayy_sync::usage(&beayy_core::data_root()).unwrap_or_else(|e| json!({ "error": e })),
-            Some("ticket") => beayy_sync::ticket(&beayy_core::data_root()).map(|(t, exp)| json!({ "len": t.len(), "expires": exp })).unwrap_or_else(|e| json!({ "error": e })),
             _ => json!({"error": "用法：--dump list_days|get_day 日期|get_settings|get_rules|place_stats"}),
         };
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
@@ -376,89 +312,89 @@ fn main() {
     }
     // 锁要活到进程结束（run 不返回），进程退出时系统自动放掉
     let Ok(_instance) = single_instance() else {
-        eprintln!("Beayy 已经在运行，这个就不开了");
+        eprintln!("时见 已经在运行，这个就不开了");
         return;
     };
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
+            focus::get_focus_state, focus::start_focus, focus::pause_focus, focus::resume_focus, focus::finish_focus,
+            focus::get_focus_day, focus::save_focus_settings, focus::save_focus_review, focus::cancel_focus_auto,
+            focus::open_focus_mini, focus::close_focus_mini, focus::open_focus_main,
+            archive::export_local_data, archive::import_local_data,
             get_status, phone_read_now, set_paused, set_login_item, quit_app, open_permission, open_data_dir, dev_report,
             data::list_days, data::get_day, data::get_rules, data::save_rules, data::get_todos, data::save_todos, data::get_memos, data::save_memos,
-            data::get_settings, data::save_settings, storage::storage_stats, data::llm_status, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, data::set_place_label, data::recent_events, data::set_place_pick, data::clear_place_pick, data::list_place_labels, data::place_stats, data::edit_place_label, amap::set_amap_key, amap::amap_around, amap::amap_search, amap::amap_map, amap::amap_js_config, amap::set_amap_js, icons::get_icons, daily::generate_daily, data::test_model,
-            data::get_profile, data::save_profile, data::list_projects, data::merge_project, data::set_project_domain,
-            sync::sync_status, sync::sync_now,
-            sync::account_signup, sync::account_login, sync::account_claim, sync::account_recover, sync::account_password,
-            sync::account_info, sync::account_remove_device, sync::account_logout, sync::account_recovery_code,
-            update::update_status, update::update_check, update::update_apply
+            data::get_settings, data::save_settings, storage::storage_stats, data::set_api_key, data::delete_since, data::list_devices, data::rename_device, data::set_place_label, data::recent_events, data::set_place_pick, data::clear_place_pick, data::list_place_labels, data::place_stats, data::edit_place_label, icons::get_icons, daily::generate_daily, daily::save_summary, data::test_model, data::list_models, data::test_models,
+            data::get_profile, data::save_profile, data::list_projects, data::merge_project, data::set_project_domain, data::get_plan, data::save_plan, data::get_week, daily::rule_history,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let root = data_root();
-            let state = Arc::new(AppState { log: Arc::new(EventLog::new(root.clone(), local_device())), phone: Mutex::new(PhoneSync::default()), relay: Mutex::new(Relay::default()), cloud: Mutex::new(String::new()), paused: Arc::new(AtomicBool::new(false)), paused_until: Mutex::new(None), today_base: Mutex::new(None) });
+            let state = Arc::new(AppState { log: Arc::new(EventLog::new(root.clone(), local_device())), phone: Mutex::new(PhoneSync::default()), paused: Arc::new(AtomicBool::new(false)), paused_until: Mutex::new(None), today_base: Mutex::new(None) });
             #[allow(unused_mut)]
             let mut launch = fields! {
                 "version" => env!("CARGO_PKG_VERSION"),
                 "impl" => "rust",
-                "permissions" => beayy_capture::permissions(),
+                "permissions" => timeseen_capture::permissions(),
                 "bundle_path" => std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default(),
                 "shadow" => shadow_mode(),
             };
             #[cfg(target_os = "macos")]
             {
-                if let Some(b) = beayy_capture::macos::bundle_path() {
+                if let Some(b) = timeseen_capture::macos::bundle_path() {
                     launch.insert("bundle_path".into(), json!(b));
                 }
-                launch.extend(beayy_capture::macos::launch_fields());
+                launch.extend(timeseen_capture::macos::launch_fields());
             }
             state.log.write("app.launch", launch, None);
             app.manage(state.clone());
+            focus::setup(app.handle());
 
             // 采集：键鼠、打字与发送、界面文字、切 app、在场（macOS 在主线程调，系统通知要挂在主线程上；Windows 自己起消息线程）
             #[cfg(target_os = "macos")]
-            beayy_capture::macos::start(state.log.clone(), state.paused.clone());
+            timeseen_capture::macos::start(state.log.clone(), state.paused.clone());
             #[cfg(target_os = "windows")]
-            beayy_capture::windows::start(state.log.clone(), state.paused.clone());
+            timeseen_capture::windows::start(state.log.clone(), state.paused.clone());
 
-            // 10 分钟摘要：每个整 10 分过后 1 分钟调起 Python 脚本（并跑版也跑，脚本跳过已写过的分段，锁文件防重入）
+            // 10 分钟摘要：每个整 10 分过后 1 分钟运行 Rust 调度器，锁文件防重入
             summarizer::start(state.log.clone(), state.paused.clone());
             // 日总结：每天 21:30 写当天，次日 0:15 重写前一天
             daily::start(state.paused.clone());
-            // 多设备同步：每 5 分钟一轮（没开同步就什么都不做；测试版不同步）
-            sync::start(state.log.clone());
-            // 自动更新：启动 1 分钟后查，之后每 6 小时；下好了由用户点「重启更新」（测试版不查）
-            if !shadow_mode() {
-                update::start();
-            }
-
             // 菜单栏：标志模板图（系统按深浅色菜单栏自动反色）＋菜单
-            let title = MenuItem::with_id(app, "title", if shadow_mode() { "Beayy 测试版（数据写影子目录，不算正式记录）".to_string() } else { PRODUCT.into() }, false, None::<&str>)?;
-            let open = MenuItem::with_id(app, "open", "打开 Beayy", true, None::<&str>)?;
+            let title = MenuItem::with_id(app, "title", if shadow_mode() { "时见 测试版（数据写影子目录，不算正式记录）".to_string() } else { PRODUCT.into() }, false, None::<&str>)?;
+            let open = MenuItem::with_id(app, "open", "打开 时见", true, None::<&str>)?;
+            let focus_open = MenuItem::with_id(app, "focus-open", "打开专注时钟", true, None::<&str>)?;
+            let focus_toggle = MenuItem::with_id(app, "focus-toggle", "暂停专注", false, None::<&str>)?;
             let perm = MenuItem::with_id(app, "perm", permission_line(), true, None::<&str>)?;
             let tap = MenuItem::with_id(app, "tap", "键鼠监听：启动中", false, None::<&str>)?;
             let phone = MenuItem::with_id(app, "phone", "iPhone：读取中", false, None::<&str>)?;
             let pause = MenuItem::with_id(app, "pause", "暂停记录", true, None::<&str>)?;
             let data = MenuItem::with_id(app, "data", "打开数据目录", true, None::<&str>)?;
             #[cfg(target_os = "macos")]
-            let login = CheckMenuItem::with_id(app, "login", "开机自动启动", true, beayy_capture::macos::login_item_enabled(), None::<&str>)?;
+            let login = CheckMenuItem::with_id(app, "login", "开机自动启动", true, timeseen_capture::macos::login_item_enabled(), None::<&str>)?;
             #[cfg(not(target_os = "macos"))]
             let login = CheckMenuItem::with_id(app, "login", "开机自动启动", false, false, None::<&str>)?;
+            let nudge = MenuItem::with_id(app, "nudge", "今天没有要说的", false, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             let sep3 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&title, &open, &sep1, &perm, &tap, &phone, &sep2, &pause, &data, &login, &sep3, &quit_item])?;
+            let menu = Menu::with_items(app, &[&title, &nudge, &open, &focus_open, &focus_toggle, &sep1, &perm, &tap, &phone, &sep2, &pause, &data, &login, &sep3, &quit_item])?;
             let icon = Image::from_bytes(include_bytes!("../../Resources/MenuBarIcon@2x.png"))?;
             TrayIconBuilder::with_id("main")
                 .icon(icon)
                 .icon_as_template(true)
-                .tooltip(if shadow_mode() { "Beayy 测试版" } else { PRODUCT })
+                .tooltip(if shadow_mode() { "时见 测试版" } else { PRODUCT })
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(move |app, e| match e.id.as_ref() {
                     "open" => open_main(app),
+                    "focus-open" => focus::open_page(app),
+                    "focus-toggle" => focus::tray_toggle(app),
                     "perm" => {
-                        let p = beayy_capture::permissions();
+                        let p = timeseen_capture::permissions();
                         let kind = if !p.accessibility {
                             "accessibility"
                         } else if !p.input_monitoring {
@@ -466,7 +402,7 @@ fn main() {
                         } else {
                             "full_disk_access"
                         };
-                        beayy_capture::open_permission(kind);
+                        timeseen_capture::open_permission(kind);
                     }
                     "data" => open_data_dir(),
                     "pause" => {
@@ -478,14 +414,15 @@ fn main() {
                     }
                     #[cfg(target_os = "macos")]
                     "login" => {
-                        let on = !beayy_capture::macos::login_item_enabled();
-                        if let Err(err) = beayy_capture::macos::set_login_item(on) {
+                        let on = !timeseen_capture::macos::login_item_enabled();
+                        if let Err(err) = timeseen_capture::macos::set_login_item(on) {
                             if let Some(s) = app.try_state::<Arc<AppState>>() {
                                 s.log.write("login_item.error", fields! {"error" => err}, None);
                             }
                         }
                     }
                     "quit" => app.exit(0),
+                    "nudge" => daily::dismiss_shown_nudge(),
                     _ => {}
                 })
                 .build(app)?;
@@ -511,47 +448,14 @@ fn main() {
                     waited += Duration::from_secs(1);
                 }
             });
-            // 后台：手表对话、iPhone 停留点每 2 分钟一轮（账号同步的新链路，加上过渡期的旧录音服务器；没登录、没设置就什么都不做）
-            let st = state.clone();
-            let relay_root = data_root();
-            std::thread::spawn(move || {
-                let mut last_err = String::new();
-                // 走账号同步的录音和停留点（新）：自己一个写入器，和旧的拉取在同一个线程里先后跑，不会同时写同一台设备
-                let mut cloud = Relay::default();
-                loop {
-                    match beayy_remote::cloud::round(&mut cloud, &relay_root, Duration::from_secs(8 * 60)) {
-                        Ok(n) => {
-                            if n.added > 0 || !n.errors.is_empty() {
-                                st.log.write("cloud.sync", fields! {"added" => n.added, "transcribed" => n.transcribed, "errors" => n.errors.join("；")}, None);
-                            }
-                            *st.cloud.lock().unwrap() = n.summary();
-                        }
-                        Err(e) => *st.cloud.lock().unwrap() = e,
-                    }
-                    let r = st.relay.lock().unwrap().pull(&relay_root);
-                    match r {
-                        Ok(n) => {
-                            last_err.clear();
-                            if n.added > 0 {
-                                st.log.write("relay.sync", fields! {"added" => n.added, "days" => n.days}, None);
-                            }
-                        }
-                        // 同一个错误只记一次
-                        Err(e) if e != last_err => {
-                            st.log.write("relay.error", fields! {"error" => e.clone()}, None);
-                            last_err = e;
-                        }
-                        Err(_) => {}
-                    }
-                    std::thread::sleep(RELAY_EVERY);
-                }
-            });
             let st = state.clone();
             let handle = app.handle().clone();
+            let nudge_item = nudge.clone();
             std::thread::spawn(move || {
-                let mut fda = beayy_capture::permissions().full_disk_access;
+                let mut fda = timeseen_capture::permissions().full_disk_access;
+                let mut nudge_at = std::time::Instant::now() - Duration::from_secs(120);
                 loop {
-                    let p = beayy_capture::permissions();
+                    let p = timeseen_capture::permissions();
                     if p.full_disk_access && !fda {
                         phone_now.store(true, Ordering::Relaxed);
                     }
@@ -567,9 +471,25 @@ fn main() {
                     let paused = st.paused.load(Ordering::Relaxed);
                     let _ = pause.set_text(if paused { "继续记录" } else { "暂停记录" });
                     #[cfg(target_os = "macos")]
-                    let _ = login.set_checked(beayy_capture::macos::login_item_enabled());
-                    if let Some(tray) = handle.tray_by_id("main") {
-                        let _ = tray.set_title(if tray_ok() { None } else { Some("!") });
+                    let _ = login.set_checked(timeseen_capture::macos::login_item_enabled());
+                    if nudge_at.elapsed() >= Duration::from_secs(60) || daily::NUDGE_DIRTY.swap(false, Ordering::Relaxed) {
+                        nudge_at = std::time::Instant::now();
+                        match daily::current_nudge() {
+                            Some(n) => {
+                                let _ = nudge_item.set_enabled(true);
+                                let _ = nudge_item.set_text(n.menu);
+                            }
+                            None => {
+                                let _ = nudge_item.set_enabled(false);
+                                let _ = nudge_item.set_text("今天没有要说的");
+                            }
+                        }
+                    }
+                    if handle.tray_by_id("main").is_some() {
+                        let focus_status = focus::tray_text(&handle);
+                        let _ = focus_toggle.set_enabled(focus_status.is_some());
+                        let _ = focus_toggle.set_text(if focus_status.as_ref().is_some_and(|(_, running)| *running) { "暂停计时" } else { "继续计时" });
+                        let _ = focus_open.set_text(focus_status.as_ref().map(|(text, _)| format!("{text} · 打开专注")).unwrap_or_else(|| "打开专注时钟".into()));
                     }
                     std::thread::sleep(Duration::from_secs(5));
                 }
@@ -586,12 +506,12 @@ fn main() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("启动 Beayy 失败")
+        .expect("启动 时见 失败")
         .run(|_app, event| match event {
             RunEvent::Exit => on_exit(_app),
             // 关掉主窗口不退出，菜单栏常驻
             RunEvent::ExitRequested { api, code, .. } if code.is_none() => api.prevent_exit(),
-            // 已在运行时再 open 一次（open -a Beayy-rs）：打开主窗口
+            // 已在运行时再 open 一次（open -a 时见-rs）：打开主窗口
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => open_main(_app),
             // 点红灯／关主窗口：隐藏到菜单栏，进程不退。真正退出走托盘「退出」或页面 quit_app。

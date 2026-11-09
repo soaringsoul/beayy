@@ -286,6 +286,11 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .delta.flat { color: var(--ink-3); background: var(--grouped); }
 .verdict.muted { color: var(--ink-4); }
 
+/* 总结编辑：文本框 + 操作按钮 */
+.sketch { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 12px; background: var(--sunken); }
+#edit-summary { width: 100%; min-height: 400px; font-family: var(--font-mono); font-size: 13px; line-height: 1.6; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); color: var(--ink); resize: vertical; }
+#edit-summary:focus { outline: none; border-color: var(--ink); }
+
 /* ---------- 侧栏：左下角照 Claude（头像＋名字·状态＋下拉，点开向上弹菜单）；设备有异常时导航上挂一个点 ---------- */
 .side-fill { flex: 1; }
 .me-wrap { position: relative; display: block; }

@@ -337,6 +337,16 @@ pub async fn generate_daily(date: String) -> Result<String, String> {
     { generate(d) }
 }
 
+/// 保存用户手动编辑过的总结（标记为人工修订，下次自动生成不覆盖）
+#[cfg_attr(not(timeseen_mobile), tauri::command)]
+pub fn save_summary(date: String, text: String) -> Result<(), String> {
+    let d = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|e| e.to_string())?;
+    let p = path_of(d);
+    fs::create_dir_all(p.parent().unwrap()).map_err(|e| format!("建不了目录 {}：{e}", p.parent().unwrap().display()))?;
+    fs::write(&p, &text).map_err(|e| format!("写不进 {}：{e}", p.display()))?;
+    Ok(())
+}
+
 /// 不存在或在本次定时节点之前写出的总结都需要更新。
 fn needs_refresh(path: &std::path::Path, cutoff: chrono::NaiveDateTime) -> bool {
     fs::metadata(path).and_then(|m| m.modified())

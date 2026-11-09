@@ -1115,7 +1115,7 @@ async function loadIcons() {
 
 // ---------- 日总结 ----------
 
-const SUM = { err: null, picks: [], forDate: null, lastDate: null };
+const SUM = { err: null, picks: [], forDate: null, lastDate: null, editing: false, raw: "" };
 
 function tomorrowHtml(date, sum) {
   if (!sum) return "";
@@ -1257,9 +1257,11 @@ async function renderSummary(arg) {
       ${readout("拿起", ph ? ph.pickups : pp.pickups ?? "—", "次", "", false, "按前台空档推算")}
       ${readout("熬夜", hasNight ? night : "—", "分钟", "21:00–5:00", night > 10)}
     </div>
-    ${sum ? `<div class="gen-empty" style="margin:var(--space-3) 0 0">${sum.note ? `<p class="note">${esc(sum.note)}</p>` : ""}<button class="mx-btn mx-btn--secondary mx-btn--sm" id="gen-daily">更新总结</button>${SUM.err ? `<div class="mx-field-error">${esc(SUM.err)}</div>` : ""}</div>` : ""}
+    ${sum ? `<div class="gen-empty" style="margin:var(--space-3) 0 0">${sum.note ? `<p class="note">${esc(sum.note)}</p>` : ""}<div class="mockbar"><span class="seg${SUM.editing ? " on" : ""}" id="toggle-edit">编辑</span><span class="seg" id="toggle-preview">预览</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="gen-daily">重新生成</button></div>${SUM.err ? `<div class="mx-field-error">${esc(SUM.err)}</div>` : ""}</div>` : ""}
     <div style="margin-top:var(--space-6)">
-      ${sum ? sum.parts.filter((p) => p.title !== "明天").map((p) => section(p.title, p.title === "今天的一句话" ? `<p class="quote">${esc(p.body)}</p>` : md(p.body))).join("")
+      ${sum && SUM.editing ? `<div class="sketch"><textarea id="edit-summary" style="width:100%;min-height:400px;font-family:var(--font-mono);font-size:13px;line-height:1.6;padding:12px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);color:var(--ink)">${esc(d.summary_md)}</textarea></div>
+        <div class="commit-acts"><button type="button" class="mx-btn mx-btn--primary mx-btn--sm" id="save-summary">保存修改</button><button type="button" class="mx-btn mx-btn--text mx-btn--sm" id="cancel-edit">放弃</button></div>`
+      : sum ? sum.parts.filter((p) => p.title !== "明天").map((p) => section(p.title, p.title === "今天的一句话" ? `<p class="quote">${esc(p.body)}</p>` : md(p.body))).join("")
             : section("这一天", `<div class="gen-empty"><p class="mx-empty-inline">还没有日总结，21:30 自动生成</p>
                 <button class="mx-btn mx-btn--primary mx-btn--sm" id="gen-daily">现在生成</button>${SUM.err ? `<div class="mx-field-error">${esc(SUM.err)}</div>` : ""}</div>`)}
       ${section("最近 14 天", actogram(rows, date))}
@@ -1286,6 +1288,18 @@ async function renderSummary(arg) {
     try { await call("generate_daily", { date }); } catch (x) { SUM.err = String(x); }
     renderSummary(date);
   };
+  const toggleEdit = document.getElementById("toggle-edit");
+  if (toggleEdit) toggleEdit.onclick = () => { SUM.editing = true; renderSummary(date); };
+  const togglePreview = document.getElementById("toggle-preview");
+  if (togglePreview) togglePreview.onclick = () => { SUM.editing = false; renderSummary(date); };
+  const saveBtn = document.getElementById("save-summary");
+  if (saveBtn) saveBtn.onclick = async () => {
+    const txt = document.getElementById("edit-summary").value;
+    try { await call("save_summary", { date, text: txt }); SUM.editing = false; renderSummary(date); }
+    catch (x) { SUM.err = String(x); renderSummary(date); }
+  };
+  const cancelBtn = document.getElementById("cancel-edit");
+  if (cancelBtn) cancelBtn.onclick = () => { SUM.editing = false; renderSummary(date); };
   const go = (x) => { if (x) location.hash = `#/summary/${x}`; };
   document.getElementById("prev").onclick = () => go(prev);
   document.getElementById("next").onclick = () => go(next);
