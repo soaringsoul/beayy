@@ -1166,12 +1166,21 @@ async function renderWeek() {
   const doneN = (w.items || []).filter((t) => t.done).length;
   const dropN = (w.items || []).filter((t) => t.dropped).length;
   const openN = (w.items || []).filter((t) => !t.done && !t.dropped).length;
+  const dl = w.delta || {};
+  const dStr = (pct) => {
+    if (pct == null) return "";
+    const s = pct > 0 ? `+${pct}%` : `${pct}%`;
+    return `<span class="delta ${pct > 0 ? "up" : pct < 0 ? "down" : "flat"}">${s} vs 上周</span>`;
+  };
+  const promPct = (dl.promise_done || 0) + (dl.promise_undone || 0) > 0
+    ? `兑现 ${Math.round((dl.promise_done || 0) / ((dl.promise_done || 0) + (dl.promise_undone || 0)) * 100)}%`
+    : "";
   const ruleBtns = (w.rules || []).filter((r) => r.text).map((r, i) => `<button type="button" data-wrule aria-checked="${i === 0 ? "true" : "false"}">${esc(r.text)}</button>`).join("");
   const projBtns = (w.projects || []).slice(0, 6).map((p, i) => `<button type="button" data-wproj aria-checked="${i === 0 ? "true" : "false"}">${esc(p.name)}</button>`).join("");
   $app.innerHTML = header("总结") + `<div class="toolbar">${kinds}<span class="daychip mono">${esc(w.start.slice(5))}–${esc(w.end.slice(5))}</span></div>` + `<div class="reading">
-    ${section("时间花在哪", bars || `<p class="mx-empty-inline">这一周还没有分成项目的时间。</p>`, { aside: "七天合计" })}
-    ${section("规矩", rules || `<p class="mx-empty-inline">还没有规矩。</p>`, { aside: "守住了几天" })}
-    ${section("承诺", items || `<p class="mx-empty-inline">这周还没有从日总结写成的待办。</p>`, { aside: `完成 ${doneN} · 没做 ${openN} · 放下 ${dropN}` })}
+    ${section("时间花在哪", bars || `<p class="mx-empty-inline">这一周还没有分成项目的时间。</p>`, { aside: `七天合计 ${dStr(dl.active_pct)}` })}
+    ${section("规矩", rules || `<p class="mx-empty-inline">还没有规矩。</p>`, { aside: `守住了几天 ${dStr(dl.late_pct)}` })}
+    ${section("承诺", items || `<p class="mx-empty-inline">这周还没有从日总结写成的待办。</p>`, { aside: `${promPct} · 完成 ${doneN} · 没做 ${openN} · 放下 ${dropN}` })}
     ${section("这周", `<p class="note">选完以后，这周剩下的「今天」顶上都会靠着它们。</p>
       ${ruleBtns ? `<div class="pick-block"><div class="k">只守一条</div><div class="choices" id="rule-choices">${ruleBtns}</div></div>` : ""}
       ${projBtns ? `<div class="pick-block"><div class="k">只推进一个项目</div><div class="choices" id="proj-choices">${projBtns}</div></div>` : ""}

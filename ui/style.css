@@ -280,6 +280,10 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .choices button { display: flex; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: transparent; text-align: left; font: inherit; color: inherit; cursor: pointer; }
 .choices button[aria-checked="true"] { border-color: var(--ink); background: var(--hover); }
 .daychip { height: 32px; display: inline-flex; align-items: center; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); }
+.delta { font-size: 12px; font-variant-numeric: tabular-nums; margin-left: 8px; padding: 1px 8px; border-radius: var(--radius-pill); }
+.delta.up { color: var(--risk); background: var(--risk-wash); }
+.delta.down { color: var(--ok); background: var(--ok-wash); }
+.delta.flat { color: var(--ink-3); background: var(--grouped); }
 .verdict.muted { color: var(--ink-4); }
 
 /* ---------- 侧栏：左下角照 Claude（头像＋名字·状态＋下拉，点开向上弹菜单）；设备有异常时导航上挂一个点 ---------- */
