@@ -74,6 +74,12 @@ async function call(cmd, args = {}) {
       return s;
     }
     case "get_day": return (await loadMock("get_day"))[args.date] || null;
+    case "generate_daily": {
+      // 浏览器预览：返回一段样例总结，不调模型
+      const gd = (await loadMock("get_day"))[args.date];
+      return `# 11-10 周二\n\n> 由时见 TimeSeen 用当天的记录生成，数据截至 2026-11-10 16:35。\n\n## 今天的一句话\n\n今天主要在做开发工作。\n\n## 时间都去哪了\n\n- 在电脑前 6.2 小时（09:12–18:40），切换 app 47 次\n\n## 节奏\n\n- 碎片度：47 次切换（约 7 次/小时）\n- 最长连续在电脑前：2.8 小时\n\n## 做成了什么\n\n- 完成了总结功能的迭代开发\n- 写了设计稿\n\n## 昨天承诺的\n\n0 条。\n\n## 规矩\n\n\n## 偏离\n\n- 没有\n\n## 明天\n\n- 继续开发月视图\n`;
+    }
+    case "save_summary": return null;
     default: return loadMock(cmd);
   }
 }
