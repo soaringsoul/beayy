@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>总结功能迭代 · 设计稿</title>
+<style>
+  :root {
+    --page: #fcfcfb; --sunken: #f9f9f7; --grouped: #f2f2ef; --surface: #ffffff;
+    --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #73726c; --ink-4: #898781;
+    --line: rgba(11,11,11,0.10); --line-2: rgba(11,11,11,0.06); --line-strong: rgba(11,11,11,0.16);
+    --hover: rgba(11,11,11,0.05); --selected: rgba(11,11,11,0.10);
+    --primary: #0b0b0b; --on-primary: #ffffff; --brand: #c6613f; --focus: #2a78d6;
+    --ok: #009300; --ok-wash: rgba(0,147,0,0.10); --warn: #fab219; --warn-wash: rgba(250,178,25,0.16);
+    --risk: #d03b3b; --risk-wash: rgba(208,59,59,0.10);
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
+    --font-serif: Georgia, "Times New Roman", "Songti SC", serif;
+    --font-mono: "SF Mono", Menlo, Consolas, monospace;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px; --space-7:48px;
+    --radius-sm:6px; --radius-md:8px; --radius-lg:12px; --radius-pill:999px;
+    --reading-width: 960px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page:#151515; --sunken:#0b0b0b; --grouped:#0b0b0b; --surface:#1a1a19;
+      --ink:#f0efec; --ink-2:#c3c2b7; --ink-3:#a5a49a; --ink-4:#898781;
+      --line:rgba(255,255,255,0.10); --line-2:rgba(255,255,255,0.06); --line-strong:rgba(255,255,255,0.20);
+      --hover:rgba(255,255,255,0.075); --selected:rgba(255,255,255,0.15);
+      --primary:#ffffff; --on-primary:#0b0b0b; --ok-wash:#11260f; --warn-wash:#311a00; --risk-wash:#3c0e0e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--page); color:var(--ink); font-family:var(--font-sans); font-size:14px; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1040px; margin:0 auto; padding:56px 24px 96px; }
+  header.doc { border-bottom:1px solid var(--line); padding-bottom:28px; margin-bottom:40px; }
+  header.doc .kicker { color:var(--ink-3); font-size:12px; letter-spacing:.06em; text-transform:uppercase; margin:0 0 8px; }
+  header.doc h1 { font-size:34px; line-height:1.2; margin:0 0 10px; font-weight:600; letter-spacing:-.01em; }
+  header.doc p { color:var(--ink-2); margin:0; max-width:60em; }
+  h2 { font-size:22px; margin:56px 0 4px; font-weight:600; letter-spacing:-.01em; }
+  h2 .no { color:var(--brand); font-variant-numeric:tabular-nums; margin-right:10px; }
+  h3 { font-size:16px; margin:28px 0 6px; font-weight:600; }
+  .lede { color:var(--ink-2); margin:0 0 20px; max-width:64em; }
+  p { margin:0 0 12px; }
+  .note { color:var(--ink-3); font-size:13px; }
+  .grid { display:grid; gap:16px; }
+  .g2 { grid-template-columns:1fr 1fr; }
+  .g3 { grid-template-columns:1fr 1fr 1fr; }
+  @media (max-width:860px){ .g2,.g3 { grid-template-columns:1fr; } }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-lg); padding:20px; }
+  .card h4 { margin:0 0 6px; font-size:15px; font-weight:600; }
+  .card p { margin:0; color:var(--ink-2); font-size:13px; }
+  .tag { display:inline-block; font-size:12px; font-weight:500; padding:1px 9px; border-radius:var(--radius-pill); border:1px solid var(--line); color:var(--ink-2); background:var(--sunken); margin-right:6px; }
+  .tag.p0 { color:var(--ok-ink,#006300); border-color:var(--ok); background:var(--ok-wash); }
+  .tag.p1 { color:var(--ink-2); border-color:var(--focus); }
+  .tag.p2 { color:var(--ink-2); }
+  .tag.risk { color:var(--risk); border-color:var(--risk); background:var(--risk-wash); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line-2); vertical-align:top; }
+  th { color:var(--ink-3); font-weight:500; font-size:12px; }
+  td b { font-weight:600; }
+  ul,ol { margin:0 0 12px; padding-left:22px; }
+  li { margin:0 0 6px; }
+  code,.mono { font-family:var(--font-mono); font-size:.9em; background:var(--grouped); padding:1px 5px; border-radius:5px; color:var(--ink); }
+  .phase { display:grid; grid-template-columns:46px 1fr; gap:18px; padding:22px 0; border-top:1px solid var(--line); }
+  .phase:first-of-type { border-top:0; }
+  .phase .num { font-size:28px; font-weight:600; color:var(--ink-3); font-variant-numeric:tabular-nums; line-height:1; }
+  .phase h3 { margin:0 0 6px; font-size:17px; }
+  .phase .meta { color:var(--ink-3); font-size:13px; margin:0 0 12px; }
+  .phase ul { margin:0; }
+  .arrow { display:flex; align-items:center; gap:10px; color:var(--ink-4); font-size:12px; margin:4px 0 18px; }
+  .arrow::before { content:""; height:1px; flex:1; background:var(--line); }
+
+  /* ---- 手机壳预览 ---- */
+  .frame { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-lg); overflow:hidden; }
+  .frame .bar { display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--line-2); background:var(--sunken); }
+  .frame .bar .dots { display:flex; gap:6px; }
+  .frame .bar .dots i { width:10px; height:10px; border-radius:50%; background:var(--line-strong); display:block; }
+  .frame .bar .t { font-size:12px; color:var(--ink-3); margin-left:auto; }
+  .frame .body { padding:20px; }
+  .frame h5 { margin:0; font-size:15px; font-weight:600; }
+  .frame .sub { color:var(--ink-3); font-size:12px; margin:2px 0 16px; }
+  .readouts { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin-bottom:18px; }
+  .readout { background:var(--sunken); border:1px solid var(--line-2); border-radius:var(--radius-md); padding:10px 12px; }
+  .readout .k { font-size:12px; color:var(--ink-3); }
+  .readout .v { font-size:20px; font-weight:600; font-variant-numeric:tabular-nums; margin-top:2px; }
+  .readout .v small { font-size:12px; font-weight:500; color:var(--ink-3); margin-left:2px; }
+  .readout .d { font-size:11px; color:var(--ink-3); margin-top:2px; }
+  .readout.warn .v { color:var(--warn-ink,#734500); }
+  .readout.ok .v { color:var(--ok-ink,#006300); }
+  .readout.risk .v { color:var(--risk); }
+  section.block { margin-bottom:22px; }
+  section.block > .h { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  section.block > .h .t { font-size:14px; font-weight:600; }
+  section.block > .h .a { margin-left:auto; font-size:12px; color:var(--ink-3); }
+  .quote { margin:0; font-size:17px; line-height:1.5; color:var(--ink); max-width:34em; }
+  .md { font-size:14px; color:var(--ink-2); }
+  .md li { margin:0 0 4px; }
+  .rule { display:flex; gap:10px; padding:7px 0; border-bottom:1px solid var(--line-2); font-size:13px; }
+  .rule:last-child { border-bottom:0; }
+  .rule .mark { width:18px; text-align:center; font-weight:600; }
+  .rule .mark.ok { color:var(--ok); } .rule .mark.risk { color:var(--risk); } .rule .mark.idle { color:var(--ink-4); }
+  .rule .body { flex:1; }
+  .rule .body b { font-weight:600; }
+  .rule .body span { color:var(--ink-3); }
+  .cmt { display:flex; gap:10px; padding:9px 0; border-bottom:1px solid var(--line-2); }
+  .cmt:last-child { border-bottom:0; }
+  .cmt .box { width:18px; height:18px; border-radius:5px; border:1.5px solid var(--line-strong); flex:none; margin-top:2px; }
+  .cmt.on .box { background:var(--primary); border-color:var(--primary); }
+  .cmt .txt { font-size:14px; }
+  .cmt .txt small { display:block; color:var(--ink-3); font-size:12px; margin-top:2px; }
+  .btn { display:inline-flex; align-items:center; gap:6px; font-size:13px; padding:7px 14px; border-radius:var(--radius-md); border:1px solid var(--line-strong); background:var(--surface); color:var(--ink); cursor:pointer; }
+  .btn.primary { background:var(--primary); color:var(--on-primary); border-color:var(--primary); }
+  .btn.sm { font-size:12px; padding:5px 11px; }
+  .btn:disabled { opacity:.45; }
+  .gen-empty { background:var(--sunken); border:1px dashed var(--line-strong); border-radius:var(--radius-md); padding:14px 16px; margin:12px 0; }
+  .gen-empty p { margin:0 0 10px; color:var(--ink-2); font-size:13px; }
+  .delta { display:inline-flex; align-items:center; gap:3px; font-size:12px; font-variant-numeric:tabular-nums; }
+  .delta.up { color:var(--risk); } .delta.down { color:var(--ok); } .delta.flat { color:var(--ink-3); }
+  .cal { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
+  .cal .dow { font-size:11px; color:var(--ink-3); text-align:center; padding:4px 0; }
+  .cal .cell { border:1px solid var(--line-2); border-radius:var(--radius-md); padding:8px; min-height:86px; background:var(--surface); }
+  .cal .cell.dim { background:var(--sunken); color:var(--ink-3); }
+  .cal .cell .d { font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .cal .cell .l { font-size:11px; color:var(--ink-2); margin-top:4px; line-height:1.4; }
+  .cal .cell .bar { height:3px; border-radius:2px; background:var(--brand); margin-top:6px; }
+  .cal .cell .bar.empty { background:var(--line); }
+  .legend { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--ink-3); margin-top:10px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+  .mockbar { display:flex; gap:6px; flex-wrap:wrap; margin:10px 0 0; }
+  .mockbar .seg { font-size:12px; padding:4px 10px; border-radius:var(--radius-pill); border:1px solid var(--line); color:var(--ink-2); background:var(--sunken); }
+  .mockbar .seg.on { background:var(--primary); color:var(--on-primary); border-color:var(--primary); }
+  .sketch { border:1px solid var(--line); border-radius:var(--radius-md); padding:14px; background:var(--sunken); }
+  .sketch .ln { height:8px; border-radius:3px; background:var(--line); margin:7px 0; }
+  .sketch .ln.w80 { width:80%; } .sketch .ln.w50 { width:50%; } .sketch .ln.w65 { width:65%; }
+  .sketch .blk { height:34px; border-radius:6px; background:var(--line); margin:10px 0; }
+  .diff { display:grid; grid-template-columns:1fr auto 1fr; gap:14px; align-items:center; }
+  @media (max-width:700px){ .diff { grid-template-columns:1fr; } .diff .arr { transform:rotate(90deg); } }
+  .diff .arr { color:var(--ink-4); font-size:18px; }
+  .diff .before { background:var(--sunken); border:1px solid var(--line-2); border-radius:var(--radius-md); padding:14px; }
+  .diff .before .badge { font-size:11px; color:var(--ink-4); margin-bottom:8px; }
+  .diff .after { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-md); padding:14px; }
+  .diff .after .badge { font-size:11px; color:var(--ok-ink,#006300); margin-bottom:8px; }
+  .flow { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:13px; }
+  .flow .node { padding:6px 12px; border:1px solid var(--line); border-radius:var(--radius-pill); background:var(--surface); }
+  .flow .node.new { border-color:var(--focus); color:var(--focus); }
+  .flow .arr { color:var(--ink-4); }
+  footer.doc { border-top:1px solid var(--line); margin-top:72px; padding-top:24px; color:var(--ink-3); font-size:12px; }
+  .pill-row { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0 0; }
+  .pill { font-size:12px; padding:5px 11px; border-radius:var(--radius-pill); border:1px solid var(--line); color:var(--ink-2); background:var(--sunken); }
+  .pill b { color:var(--ink); font-weight:600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <p class="kicker">设计稿 · 总结功能迭代</p>
+  <h1>让总结不只是「一天的流水」，而是「你和自己的承诺」</h1>
+  <p>本文档基于对 <code>crates/timeseen-summary</code>、<code>src-tauri/src/daily.rs</code>、<code>ui/app.js</code> 总结页的深入阅读。它给出分析、迭代路线图、以及每个迭代的 UI 设计稿。所有视觉沿用墨线（moxian）令牌与现有组件，落地时直接写进 <code>ui/style.css</code> / <code>ui/app.js</code>，不需要新设计系统。</p>
+</header>
+
+<!-- ============ 1 分析 ============ -->
+<h2><span class="no">01</span>现状分析</h2>
+<p class="lede">先看清楚现在这条链路能做什么、卡在哪里，再决定迭代顺序。</p>
+
+<h3>数据链路</h3>
+<div class="flow">
+  <span class="node">10 分钟分段摘要</span><span class="arr">→</span>
+  <span class="node">小时 rollup</span><span class="arr">→</span>
+  <span class="node">日总结（21:30 / 次日 0:15）</span><span class="arr">→</span>
+  <span class="node">周视图</span><span class="arr">→</span>
+  <span class="node">明天承诺 → 待办</span>
+</div>
+<p class="note" style="margin-top:10px">分段由 <code>summarizer.rs</code> 每 10 分钟调度；日总结由 <code>daily.rs</code> 用当天 <code>get_day</code> 的统计喂给模型；页面 <code>renderSummary</code> 渲染并把「明天」写回待办。</p>
+
+<h3>三个结构性缺口</h3>
+<div class="g3">
+  <div class="card">
+    <h4>① 承诺没有回流</h4>
+    <p>昨天「明天」写的待办，今天生成日总结时只带<b>未完成待办</b>，不带<b>昨日承诺</b>。于是「昨天答应、今天没做」永远不会出现在 drift 里，承诺闭环在模型那一步断了。</p>
+  </div>
+  <div class="card">
+    <h4>② 只有日 / 周，没有月</h4>
+    <p>月 tab 写着「先不做月」。日与日之间缺一层，看不出「这个月我到底把时间花在了哪几个项目上」「规矩这月守住几天」。</p>
+  </div>
+  <div class="card">
+    <h4>③ 数字全，但结论弱</h4>
+    <p>时长、切换、规矩都有，但缺<b>节奏</b>（碎片度、连续专注、拿起间隔）和<b>跨期对比</b>（vs 上周）。模型只能写「今天用了 X 小时」，写不出「今天下午切换了 87 次」。</p>
+  </div>
+</div>
+
+<h3>次要缺口</h3>
+<ul>
+  <li>模型返回坏 JSON 时整篇失败，无降级；总结生成后不可编辑。</li>
+  <li>AI 关掉就完全没有日总结，缺「本地版」。</li>
+  <li>「明天」条目的「约 25 分钟」是写死的（<code>ui/app.js:1123</code>）。</li>
+  <li>规矩引擎只认「几点以后」和「每天不超过 N 分钟/小时」，算不出来的在页面没有提示。</li>
+</ul>
+
+<!-- ============ 2 路线图 ============ -->
+<h2><span class="no">02</span>迭代路线图</h2>
+<p class="lede">四个阶段，每阶段独立可交付、不互相阻塞。顺序按「收益 / 改动量」排。</p>
+
+<div class="phase">
+  <div class="num">1</div>
+  <div>
+    <h3>承诺回流与节奏洞察 <span class="tag p0">先做</span></h3>
+    <p class="meta">改动小 · 逻辑缺口 · 不新增页面</p>
+    <ul>
+      <li><b>昨日承诺回流</b>：日总结 prompt 增加「昨天承诺的 N 条做成了几条」，让 drift 能写「昨天答应的 X 没做」。</li>
+      <li><b>节奏洞察</b>：从原始事件算碎片度（每小时切换次数）、最长连续专注、手机拿起间隔，作为固定字段喂模型。</li>
+      <li><b>10 分钟摘要承接上文</b>：把上一段摘要前 100 字带进 prompt，小时 rollup 更连贯，减少逐段重复。</li>
+    </ul>
+  </div>
+</div>
+
+<div class="phase">
+  <div class="num">2</div>
+  <div>
+    <h3>周视图对比 + 总结可编辑 <span class="tag p1">次做</span></h3>
+    <p class="meta">中等 · 现有页面增强</p>
+    <ul>
+      <li><b>这周 vs 上周</b>：在电脑前、熬夜、项目时长、承诺兑现率，各加一个 delta 读数。</li>
+      <li><b>总结可编辑</b>：生成后可就地编辑 markdown，存为最终版，覆盖自动生成。</li>
+      <li><b>JSON 容错</b>：模型返回坏 JSON 时自动修复重试一次，仍失败则降级纯文本渲染。</li>
+    </ul>
+  </div>
+</div>
+
+<div class="phase">
+  <div class="num">3</div>
+  <div>
+    <h3>月视图 <span class="tag p2">可后做</span></h3>
+    <p class="meta">中等 · 新视图</p>
+    <ul>
+      <li><b>月历</b>：每天一句话 + 项目月度合计条形 + 规矩月度守住率。</li>
+      <li><b>项目月度排行</b>：跨天聚合，回答「这个月时间花在哪几个项目」。</li>
+    </ul>
+  </div>
+</div>
+
+<div class="phase">
+  <div class="num">4</div>
+  <div>
+    <h3>回看搜索 + 本地版 + 规矩引擎 <span class="tag p2">远期</span></h3>
+    <p class="meta">较大 · 新功能</p>
+    <ul>
+      <li><b>全文搜索</b>：按关键词 / 项目 / 日期搜所有日总结 markdown。</li>
+      <li><b>本地版总结</b>：AI 关掉也能出纯统计 + 模板文字。</li>
+      <li><b>规矩引擎扩语法</b>：工作日/周末、每周不超过、每次不超过，算不出来给提示。</li>
+    </ul>
+  </div>
+</div>
+
+<div class="arrow">落地顺序：1 → 2 → 3 → 4。1 和 2 可合并成一个版本；3、4 各自独立。</div>
+
+<!-- ============ 3 设计规范 ============ -->
+<h2><span class="no">03</span>设计规范</h2>
+<p class="lede">全部沿用墨线令牌，不引入新色板。新增只做「结构」，不做「皮肤」。</p>
+
+<div class="g3">
+  <div class="card">
+    <h4>读数卡</h4>
+    <p>沿用 <code>.readout</code>：键小字灰、值大字重、副注更小。新读数（碎片度、连续专注）放进同一套。</p>
+  </div>
+  <div class="card">
+    <h4>delta 徽标</h4>
+    <p>新增 <code>.delta</code>：绿升红降灰平，紧跟读数右侧，回答「比上周怎样」。颜色语义与规矩 ✓/✗ 一致。</p>
+  </div>
+  <div class="card">
+    <h4>承诺行</h4>
+    <p>沿用 <code>.cmt</code> 勾选行，「约 25 分钟」改为可编辑 <code>.cmt-meta</code>，默认按项目近期时长估算。</p>
+  </div>
+</div>
+
+<!-- ============ 4 设计稿 ============ -->
+<h2><span class="no">04</span>设计稿</h2>
+<p class="lede">以下为关键屏的迭代前后对照。左边是现状，右边是迭代后。</p>
+
+<!-- 4.1 日总结 节奏读数 -->
+<h3>4.1 日总结 · 顶部读数加节奏</h3>
+<div class="g2">
+  <div class="frame">
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="t">今天</span></div>
+    <div class="body">
+      <h5>11-09 周日</h5>
+      <div class="sub">在电脑前 6.2 小时 · 手机 3.1 小时</div>
+      <div class="readouts">
+        <div class="readout"><div class="k">在电脑前</div><div class="v">6.2<small>h</small></div><div class="d">09:12–18:40</div></div>
+        <div class="readout"><div class="k">手机</div><div class="v">3.1<small>h</small></div><div class="d">拿起 47 次</div></div>
+        <div class="readout warn"><div class="k">熬夜</div><div class="v">42<small>分</small></div><div class="d">21:00–5:00</div></div>
+      </div>
+      <p class="note">现状：只有时长类读数，没有「今天节奏怎样」。</p>
+    </div>
+  </div>
+  <div class="frame">
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="t">迭代后</span></div>
+    <div class="body">
+      <h5>11-09 周日</h5>
+      <div class="sub">在电脑前 6.2 小时 · 手机 3.1 小时</div>
+      <div class="readouts">
+        <div class="readout"><div class="k">在电脑前</div><div class="v">6.2<small>h</small></div><div class="d">09:12–18:40 <span class="delta flat">持平</span></div></div>
+        <div class="readout"><div class="k">手机</div><div class="v">3.1<small>h</small></div><div class="d">拿起 47 次 <span class="delta up">+9</span></div></div>
+        <div class="readout warn"><div class="k">熬夜</div><div class="v">42<small>分</small></div><div class="d">21:00–5:00 <span class="delta up">+12</span></div></div>
+        <div class="readout"><div class="k">碎片度</div><div class="v">87<small>次切换</small></div><div class="d">下午 6 分钟/次 <span class="delta up">碎</span></div></div>
+        <div class="readout ok"><div class="k">最长专注</div><div class="v">52<small>分</small></div><div class="d">14:03 起 <span class="delta down">稳</span></div></div>
+        <div class="readout"><div class="k">拿起间隔</div><div class="v">4<small>分</small></div><div class="d">平均 <span class="delta up">+1</span></div></div>
+      </div>
+      <p class="note">新增「碎片度 / 最长专注 / 拿起间隔」三张卡，模型据此能写出「今天下午切换太碎」这种结论。</p>
+    </div>
+  </div>
+</div>
+
+<!-- 4.2 昨日承诺回流 -->
+<h3>4.2 日总结 · 昨日承诺回流进「偏离」</h3>
+<p class="note">迭代前：漂移只写规矩没守住。迭代后：把昨天承诺做成几条带进 prompt，没兑现的进 drift。</p>
+<div class="g2">
+  <div class="frame">
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="t">迭代前</span></div>
+    <div class="body">
+      <section class="block"><div class="h"><span class="t">做成了什么</span></div><div class="md"><ul><li>把周报初稿写完</li><li>给设计稿提了三条意见</li></ul></div></section>
+      <section class="block"><div class="h"><span class="t">偏离</span></div><div class="md"><ul><li>规矩「22 点以后不刷手机」没守住</li></ul></div></section>
+      <p class="note">昨天承诺的「今天开始跑那个脚本」没做，但模型看不见这条承诺，drift 里不会提。</p>
+    </div>
+  </div>
+  <div class="frame">
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="t">迭代后</span></div>
+    <div class="body">
+      <section class="block"><div class="h"><span class="t">做成了什么</span></div><div class="md"><ul><li>把周报初稿写完</li><li>给设计稿提了三条意见</li></ul></div></section>
+      <section class="block"><div class="h"><span class="t">昨天承诺的</span><span class="a">3 条 · 做成 1 条</span></div>
+        <div class="cmt"><div class="box"></div><div class="txt">开始跑数据迁移脚本<small>昨天 09:30 · 没做</small></div></div>
+        <div class="cmt on"><div class="box"></div><div class="txt">把 API 文档补完<small>昨天 09:30 · 做了</small></div></div>
+      </section>
+      <section class="block"><div class="h"><span class="t">偏离</span></div><div class="md"><ul><li>昨天答应的「开始跑数据迁移脚本」今天没动</li><li>规矩「22 点以后不刷手机」没守住</li></ul></div></section>
+      <p class="note">承诺回流后，drift 能点名「昨天答应的没做」，闭环成立。</p>
+    </div>
+  </div>
+</div>
+
+<!-- 4.3 周视图对比 -->
+<h3>4.3 周视图 · 这周 vs 上周</h3>
+<p class="note">迭代前只有 7 天条形。迭代后每个板块顶部加一行 delta，一眼看趋势。</p>
+<div class="g2">
+  <div class="frame">
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="t">迭代前</span></div>
+    <div class="body">
+      <section class="block"><div class="h"><span class="t">时间花在哪</span><span class="a">七天合计</span></div>
+        <div class="bar-row"><span class="bar-name">写作</span><span class="bar"><i style="width:80%"></i></span><span class="bar-v mono">14h</span><span class="bar-p mono">40%</span></div>
+        <div class="bar-row"><span class="bar-name">编码</span><span class="bar"><i style="width:55%"></i></span><span class="bar-v mono">9h</span><span class="bar-p mono">26%</span></div>
+      </section>
+      <section class="block"><div class="h"><span class="t">承诺</span><span class="a">完成 2 · 没做 1 · 放下 0</span></div>
+        <div class="cmt on"><div class="box"></div><div class="txt">写周报<small>做了</small></div></div>
+      </section>
+      <p class="note">缺「比上周怎样」，看不出这周是变好了还是变坏了。</p>
+    </div>
+  </div>
+  <div class="frame">
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="t">迭代后</span></div>
+    <div class="body">
+      <section class="block"><div class="h"><span class="t">时间花在哪</span><span class="a">七天合计 <span class="delta up">编码 +3h</span></span></div>
+        <div class="bar-row"><span class="bar-name">写作</span><span class="bar"><i style="width:80%"></i></span><span class="bar-v mono">14h</span><span class="bar-p mono">40%</span></div>
+        <div class="bar-row"><span class="bar-name">编码</span><span class="bar"><i style="width:55%"></i></span><span class="bar-v mono">9h</span><span class="bar-p mono">26%</span></div>
+      </section>
+      <section class="block"><div class="h"><span class="t">规矩</span><span class="a">守住 4/7 <span class="delta up">差 1 天</span></span></div>
+        <div class="rule"><span class="mark ok">✓</span><div class="body"><b>22 点以后不刷手机</b><span>· 守住 4/7</span></div></div>
+      </section>
+      <section class="block"><div class="h"><span class="t">承诺</span><span class="a">完成 2 · 没做 1 <span class="delta flat">兑现 67%</span></span></div>
+        <div class="cmt on"><div class="box"></div><div class="txt">写周报<small>做了</small></div></div>
+      </section>
+      <p class="note">delta 颜色：绿=变好，红=变差，灰=持平。与规矩 ✓/✗ 语义一致。</p>
+    </div>
+  </div>
+</div>
+
+<!-- 4.4 月视图 -->
+<h3>4.4 月视图（新）</h3>
+<div class="frame">
+  <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="t">月</span></div>
+  <div class="body">
+    <h5>11 月</h5>
+    <div class="sub">在电脑前合计 138h · 规矩守住 16/23 天 · 承诺兑现 61%</div>
+    <div class="cal">
+      <div class="dow">一</div><div class="dow">二</div><div class="dow">三</div><div class="dow">四</div><div class="dow">五</div><div class="dow">六</div><div class="dow">日</div>
+      <div class="cell dim"><div class="d">27</div></div>
+      <div class="cell dim"><div class="d">28</div></div>
+      <div class="cell dim"><div class="d">29</div></div>
+      <div class="cell dim"><div class="d">30</div></div>
+      <div class="cell dim"><div class="d">31</div></div>
+      <div class="cell"><div class="d">1</div><div class="l">写作 2h</div><div class="bar" style="width:40%"></div></div>
+      <div class="cell"><div class="d">2</div><div class="l">编码 4h</div><div class="bar" style="width:80%"></div></div>
+      <div class="cell"><div class="d">3</div><div class="l">编码 3h</div><div class="bar" style="width:60%"></div></div>
+      <div class="cell"><div class="d">4</div><div class="l">写作 1h</div><div class="bar" style="width:20%"></div></div>
+      <div class="cell"><div class="d">5</div><div class="l">编码 5h</div><div class="bar" style="width:100%"></div></div>
+      <div class="cell"><div class="d">6</div><div class="l">编码 2h</div><div class="bar" style="width:40%"></div></div>
+      <div class="cell"><div class="d">7</div><div class="l">休息</div><div class="bar empty" style="width:10%"></div></div>
+      <div class="cell"><div class="d">8</div><div class="l">写作 3h</div><div class="bar" style="width:60%"></div></div>
+      <div class="cell"><div class="d">9</div><div class="l">编码 4h</div><div class="bar" style="width:80%"></div></div>
+      <div class="cell"><div class="d">10</div><div class="l">编码 3h</div><div class="bar" style="width:60%"></div></div>
+      <div class="cell"><div class="d">11</div><div class="l">写作 2h</div><div class="bar" style="width:40%"></div></div>
+      <div class="cell"><div class="d">12</div><div class="l">编码 5h</div><div class="bar" style="width:100%"></div></div>
+      <div class="cell"><div class="d">13</div><div class="l">编码 4h</div><div class="bar" style="width:80%"></div></div>
+      <div class="cell"><div class="d">14</div><div class="l">写作 3h</div><div class="bar" style="width:60%"></div></div>
+      <div class="cell"><div class="d">15</div><div class="l">编码 2h</div><div class="bar" style="width:40%"></div></div>
+    </div>
+    <div class="legend"><span><i style="background:var(--brand)"></i>在电脑前时长</span><span><i style="background:var(--ok)"></i>规矩守住</span><span><i style="background:var(--risk)"></i>熬夜</span><span><i style="background:var(--line)"></i>无记录</span></div>
+    <section class="block" style="margin-top:18px"><div class="h"><span class="t">项目月度排行</span><span class="a">这个月时间花在哪</span></div>
+      <div class="bar-row"><span class="bar-name">写作</span><span class="bar"><i style="width:70%"></i></span><span class="bar-v mono">42h</span><span class="bar-p mono">30%</span></div>
+      <div class="bar-row"><span class="bar-name">编码</span><span class="bar"><i style="width:95%"></i></span><span class="bar-v mono">55h</span><span class="bar-p mono">40%</span></div>
+      <div class="bar-row"><span class="bar-name">阅读</span><span class="bar"><i style="width:35%"></i></span><span class="bar-v mono">20h</span><span class="bar-p mono">15%</span></div>
+    </section>
+    <p class="note">点某一天进日总结；格子高度固定，条形长度=当天在电脑前时长。</p>
+  </div>
+</div>
+
+<!-- 4.5 回看搜索 -->
+<h3>4.5 回看搜索（新）</h3>
+<div class="g2">
+  <div class="frame">
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="t">搜索</span></div>
+    <div class="body">
+      <div class="sketch" style="margin-bottom:14px">
+        <div class="ln w50" style="height:14px;background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius-md)"></div>
+        <div class="note" style="margin-top:8px">按关键词 / 项目 / 日期搜所有日总结</div>
+      </div>
+      <section class="block"><div class="h"><span class="t">11-09</span><span class="a">在电脑前 6.2h</span></div>
+        <div class="md"><p>……下午切换太碎，<b>数据迁移脚本</b>还是没动……</p></div></section>
+      <section class="block"><div class="h"><span class="t">11-03</span><span class="a">在电脑前 4.1h</span></div>
+        <div class="md"><p>……开始<b>数据迁移脚本</b>的调研……</p></div></section>
+      <section class="block"><div class="h"><span class="t">10-28</span><span class="a">在电脑前 7.8h</span></div>
+        <div class="md"><p>……<b>数据迁移脚本</b>卡在权限……</p></div></section>
+    </div>
+  </div>
+  <div class="card">
+    <h4>设计要点</h4>
+    <ul>
+      <li>结果按日期倒序，每条是日总结里命中的那一句 + 日期 + 当天读数。</li>
+      <li>支持按项目筛（点项目名，如「数据迁移」），按日期范围筛。</li>
+      <li>点一条跳日总结页并高亮命中句。</li>
+      <li>全文走 <code>rg</code>，数据是本地 markdown，不需要索引服务。</li>
+    </ul>
+  </div>
+</div>
+
+<!-- 4.6 总结可编辑 -->
+<h3>4.6 总结可编辑</h3>
+<div class="frame">
+  <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="t">编辑</span></div>
+  <div class="body">
+    <div class="gen-empty" style="margin:0 0 14px">
+      <p class="note" style="margin:0">已生成 · 可直接修改，保存后覆盖自动版本。</p>
+      <div class="mockbar"><span class="seg on">编辑</span><span class="seg">预览</span><span class="seg">重新生成</span></div>
+    </div>
+    <div class="sketch">
+      <div class="ln w80"></div><div class="ln"></div><div class="ln w65"></div>
+      <div class="blk"></div>
+      <div class="ln w80"></div><div class="ln w50"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px"><button class="btn primary sm">保存</button><button class="btn sm">放弃修改</button></div>
+    <p class="note" style="margin-top:12px">编辑态下 markdown 原样可改；预览态渲染成页面样式。保存写回 <code>日总结_YYYYMMDD.md</code>，并标记为「人工修订」，下次自动生成不覆盖。</p>
+  </div>
+</div>
+
+<!-- ============ 5 落地 ============ -->
+<h2><span class="no">05</span>落地顺序</h2>
+<table>
+  <thead><tr><th>阶段</th><th>改动文件</th><th>工作量</th><th>风险</th></tr></thead>
+  <tbody>
+    <tr><td><b>1 承诺回流 + 节奏</b></td><td><code>daily.rs</code> prompt、<code>summarizer.rs</code> 时长表、<code>app.js</code> 读数卡</td><td>小</td><td>节奏指标需从原始事件重算，注意历史数据没有 presence</td></tr>
+    <tr><td><b>2 周对比 + 可编辑</b></td><td><code>app.js</code> renderWeek、<code>daily.rs</code> 存盘</td><td>中</td><td>delta 口径要和日总结一致，否则对不上</td></tr>
+    <tr><td><b>3 月视图</b></td><td>新 <code>renderMonth</code>、<code>get_week</code> 扩月聚合</td><td>中</td><td>跨月熬夜归属要和日总结同一套</td></tr>
+    <tr><td><b>4 搜索 + 本地版</b></td><td>新页面、<code>daily.rs</code> 本地分支</td><td>大</td><td>搜索走 rg，注意数据根（测试版影子目录）</td></tr>
+  </tbody>
+</table>
+
+<div class="pill-row" style="margin-top:24px">
+  <span class="pill"><b>推荐第一步</b> · 阶段 1 的「昨日承诺回流」</span>
+  <span class="pill"><b>推荐第二步</b> · 阶段 1 的「节奏洞察」</span>
+  <span class="pill"><b>不急</b> · 月视图、搜索</span>
+</div>
+
+<footer class="doc">
+  设计稿 · 总结功能迭代 · 基于墨线令牌与现有组件 · 可直接落地进 <code>ui/</code> 与 <code>src-tauri/src/daily.rs</code>。
+</footer>
+
+</div>
+</body>
+</html>
